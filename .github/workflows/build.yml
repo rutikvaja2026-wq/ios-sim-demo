@@ -562,8 +562,8 @@ jobs:
             A1000000000000000000000C = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
             A1000000000000000000000D /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
             A1000000000000000000000E /* Release */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
-            A1000000000000000000000F /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
-            A10000000000000000000010 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+            A1000000000000000000000F /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; CURRENT_PROJECT_VERSION = 1; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
+            A10000000000000000000010 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; CURRENT_PROJECT_VERSION = 1; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
            };
            rootObject = A10000000000000000000001;
           }
@@ -641,6 +641,6 @@ jobs:
           name: DDEGlassStore-simulator
           path: DDEGlassStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v6.0.0 DDEGlassStore-simulator.zip --title "DDE Glass Store v6 - his starter project (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's own DDE Glass Store starter project. Upload DDEGlassStore-simulator.zip to Appetize to run it."
+        run: gh release create v6.1.0 DDEGlassStore-simulator.zip --title "DDE Glass Store v6.1 - his starter project (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's own DDE Glass Store starter project. Upload DDEGlassStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
