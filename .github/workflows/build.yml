@@ -349,27 +349,63 @@ jobs:
           cat > 'DDEGlassStore/ProfileView.swift' <<'EOF_DDEGLASSSTORE_PROFILEVIEW_SWIFT'
           import SwiftUI
 
+          enum AccentPalette {
+              static let options: [(String, Color)] = [("Blue", .blue), ("Purple", .purple), ("Pink", .pink), ("Orange", .orange), ("Green", .green)]
+              static func color(for name: String) -> Color {
+                  options.first { $0.0.lowercased() == name.lowercased() }?.1 ?? .blue
+              }
+          }
+
           struct ProfileView: View {
               @EnvironmentObject private var store: StoreViewModel
+              @AppStorage("dde_display_name") private var displayName: String = "Guest"
+              @AppStorage("dde_avatar_color") private var avatarColor: String = "blue"
+              @AppStorage("dde_accent") private var accentName: String = "blue"
+
+              private var initials: String {
+                  let parts = displayName.split(separator: " ")
+                  let first = parts.first?.prefix(1) ?? "G"
+                  let second = parts.count > 1 ? parts[1].prefix(1) : Substring("")
+                  return (first + second).uppercased()
+              }
+
               var body: some View {
                   NavigationStack {
                       Form {
                           Section {
                               HStack(spacing: 14) {
-                                  Image(systemName: "person.crop.circle.fill").font(.system(size: 48)).foregroundStyle(.secondary)
-                                  VStack(alignment: .leading) {
-                                      Text("Guest profile").font(.headline)
+                                  Circle()
+                                      .fill(LinearGradient(colors: [AccentPalette.color(for: avatarColor), AccentPalette.color(for: avatarColor).opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                      .frame(width: 54, height: 54)
+                                      .overlay(Text(initials).font(.title3.bold()).foregroundStyle(.white))
+                                      .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text(displayName.isEmpty ? "Guest" : displayName).font(.headline)
                                       Text("Your saved app discoveries").font(.caption).foregroundStyle(.secondary)
                                   }
-                              }.padding(.vertical, 8)
+                              }.padding(.vertical, 6)
+                          }
+                          Section("Customize Profile") {
+                              TextField("Display name", text: $displayName)
+                              Picker("Avatar color", selection: $avatarColor) {
+                                  ForEach(AccentPalette.options, id: \.0) { name, _ in
+                                      Text(name).tag(name.lowercased())
+                                  }
+                              }
                           }
                           Section("Appearance") {
                               Picker("Theme", selection: Binding(
-                                  get: { store.colorScheme == .light ? "Light" : "Dark" },
-                                  set: { store.colorScheme = $0 == "Light" ? .light : .dark }
+                                  get: { store.colorScheme == .light ? "Light" : store.colorScheme == .dark ? "Dark" : "System" },
+                                  set: { store.colorScheme = $0 == "Light" ? .light : $0 == "Dark" ? .dark : nil }
                               )) {
+                                  Text("System").tag("System")
                                   Text("Dark").tag("Dark")
                                   Text("Light").tag("Light")
+                              }
+                              Picker("Accent color", selection: $accentName) {
+                                  ForEach(AccentPalette.options, id: \.0) { name, _ in
+                                      Text(name).tag(name.lowercased())
+                                  }
                               }
                           }
                           Section("About") {
@@ -465,6 +501,8 @@ jobs:
 
           struct RootView: View {
               @EnvironmentObject private var store: StoreViewModel
+              @Namespace private var tabNS
+              @AppStorage("dde_accent") private var accentName: String = "blue"
 
               var body: some View {
                   ZStack(alignment: .bottom) {
@@ -484,6 +522,7 @@ jobs:
                       tabBar
                   }
                   .task { await store.loadFeatured() }
+                  .tint(AccentPalette.color(for: accentName))
               }
 
               private var background: some View {
@@ -529,10 +568,28 @@ jobs:
                           Text(title).font(.system(size: 9, weight: .semibold))
                       }
                       .foregroundStyle(store.selectedTab == index ? Color.accentColor : Color.secondary)
-                      .frame(maxWidth: .infinity).padding(.vertical, 3)
+                      .frame(maxWidth: .infinity).padding(.vertical, 6)
+                      .background {
+                          if store.selectedTab == index { selectedPill }
+                      }
                       .contentShape(Rectangle())
                   }
                   .buttonStyle(.plain)
+              }
+
+              @ViewBuilder private var selectedPill: some View {
+                  if #available(iOS 26.0, *) {
+                      Capsule()
+                          .fill(.clear)
+                          .glassEffect(.regular.tint(.accentColor.opacity(0.35)).interactive(), in: Capsule())
+                          .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 1))
+                          .matchedGeometryEffect(id: "tabPill", in: tabNS)
+                  } else {
+                      Capsule()
+                          .fill(Color.accentColor.opacity(0.15))
+                          .overlay(Capsule().strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 1))
+                          .matchedGeometryEffect(id: "tabPill", in: tabNS)
+                  }
               }
           }
           EOF_DDEGLASSSTORE_ROOTVIEW_SWIFT
@@ -783,6 +840,6 @@ jobs:
           name: DDEStore-simulator
           path: DDEStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v7.0.0 DDEStore-simulator.zip --title "DDE Store - his Advanced project with his logo (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's DDE Glass Store Advanced project, display name DDE Store, with his app icon. Upload DDEStore-simulator.zip to Appetize to run it."
+        run: gh release create v7.1.0 DDEStore-simulator.zip --title "DDE Store v7.1 - sliding glass nav + profile customization (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's DDE Glass Store Advanced project, display name DDE Store, with his app icon. Upload DDEStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
