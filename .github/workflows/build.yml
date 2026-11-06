@@ -926,26 +926,24 @@ jobs:
           }
           // MARK: - Apps (full catalogue)
           struct AppsView: View {
-              let cats = ["Productivity", "Social Media", "Entertainment", "Utilities", "Games", "Photo & Video"]
+              var sections: [(String, [StoreApp])] {
+                  let cats = ["Productivity", "Social Media", "Entertainment", "Utilities", "Games", "Photo & Video"]
+                  var out: [(String, [StoreApp])] = []
+                  for cat in cats {
+                      let apps = catalogue.filter { $0.category == cat }
+                      if !apps.isEmpty { out.append((cat, apps)) }
+                  }
+                  return out
+              }
 
               var body: some View {
                   NavigationStack {
                       List {
-                          ForEach(cats, id: \.self) { cat in
-                              let apps = catalogue.filter { $0.category == cat }
-                              if !apps.isEmpty {
-                                  Section(header: Text(cat)) {
-                                      ForEach(apps) { app in
-                                          NavigationLink(destination: AppDetailView(app: app)) {
-                                              HStack(spacing: 12) {
-                                                  AppIcon(app: app, size: 46)
-                                                  VStack(alignment: .leading, spacing: 2) {
-                                                      Text(app.name).font(.headline)
-                                                      Text(app.tagline).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                                                  }
-                                              }
-                                              .padding(.vertical, 4)
-                                          }
+                          ForEach(sections, id: \.0) { section in
+                              Section(header: Text(section.0)) {
+                                  ForEach(section.1) { app in
+                                      NavigationLink(destination: AppDetailView(app: app)) {
+                                          AppLibRow(app: app, subtitle: app.tagline)
                                       }
                                   }
                               }
@@ -955,6 +953,21 @@ jobs:
                       .listStyle(.insetGrouped)
                       .navigationTitle("Apps")
                   }
+              }
+          }
+
+          struct AppLibRow: View {
+              let app: StoreApp
+              let subtitle: String
+              var body: some View {
+                  HStack(spacing: 12) {
+                      AppIcon(app: app, size: 46)
+                      VStack(alignment: .leading, spacing: 2) {
+                          Text(app.name).font(.headline)
+                          Text(subtitle).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                      }
+                  }
+                  .padding(.vertical, 4)
               }
           }
 
@@ -968,6 +981,36 @@ jobs:
               var updatable: [StoreApp] {
                   let installedNames = Set(installed.map { $0.app.name })
                   return catalogue.filter { !installedNames.contains($0.name) }.prefix(2).map { $0 }
+              }
+
+              @ViewBuilder var savedSection: some View {
+                  Section(header: Text("Saved")) {
+                      if savedApps.isEmpty {
+                          Text("Nothing saved yet. Tap the heart on any app to save it here.")
+                              .font(.subheadline).foregroundColor(.secondary)
+                      } else {
+                          ForEach(savedApps) { app in
+                              NavigationLink(destination: AppDetailView(app: app)) {
+                                  AppLibRow(app: app, subtitle: app.category)
+                              }
+                          }
+                      }
+                  }
+              }
+
+              @ViewBuilder var recentSection: some View {
+                  Section(header: Text("Recently Viewed")) {
+                      if recentApps.isEmpty {
+                          Text("Apps you open will show up here.")
+                              .font(.subheadline).foregroundColor(.secondary)
+                      } else {
+                          ForEach(recentApps) { app in
+                              NavigationLink(destination: AppDetailView(app: app)) {
+                                  AppLibRow(app: app, subtitle: app.developer)
+                              }
+                          }
+                      }
+                  }
               }
 
               var body: some View {
@@ -990,45 +1033,8 @@ jobs:
                               }
                           }
 
-                          Section(header: Text("Saved")) {
-                              if savedApps.isEmpty {
-                                  Text("Nothing saved yet. Tap the heart on any app to save it here.")
-                                      .font(.subheadline).foregroundColor(.secondary)
-                              } else {
-                                  ForEach(savedApps) { app in
-                                      NavigationLink(destination: AppDetailView(app: app)) {
-                                          HStack(spacing: 12) {
-                                              AppIcon(app: app, size: 46)
-                                              VStack(alignment: .leading, spacing: 2) {
-                                                  Text(app.name).font(.headline)
-                                                  Text(app.category).font(.caption).foregroundColor(.secondary)
-                                              }
-                                          }
-                                          .padding(.vertical, 4)
-                                      }
-                                  }
-                              }
-                          }
-
-                          Section(header: Text("Recently Viewed")) {
-                              if recentApps.isEmpty {
-                                  Text("Apps you open will show up here.")
-                                      .font(.subheadline).foregroundColor(.secondary)
-                              } else {
-                                  ForEach(recentApps) { app in
-                                      NavigationLink(destination: AppDetailView(app: app)) {
-                                          HStack(spacing: 12) {
-                                              AppIcon(app: app, size: 46)
-                                              VStack(alignment: .leading, spacing: 2) {
-                                                  Text(app.name).font(.headline)
-                                                  Text(app.developer).font(.caption).foregroundColor(.secondary)
-                                              }
-                                          }
-                                          .padding(.vertical, 4)
-                                      }
-                                  }
-                              }
-                          }
+                          savedSection
+                          recentSection
 
                           Section(header: Text("Installed (Demo)")) {
                               if installed.isEmpty {
