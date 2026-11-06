@@ -14,62 +14,180 @@ jobs:
       - name: Write app source
         run: |
           mkdir -p Sources
-          cat > Sources/AppStore.swift <<'SWIFT'
+          cat > Sources/DDEStore.swift <<'SWIFT'
           import SwiftUI
 
           @main
-          struct AppStoreApp: App {
+          struct DDEStoreApp: App {
+              @StateObject private var store = StoreModel()
+              @AppStorage("dde_theme") private var theme: String = "system"
               var body: some Scene {
-                  WindowGroup { RootView() }
+                  WindowGroup {
+                      RootView()
+                          .environmentObject(store)
+                          .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
+                  }
               }
           }
 
-          struct StoreApp: Identifiable {
+          struct StoreApp: Identifiable, Hashable {
               let id = UUID()
               let name: String
+              let developer: String
               let category: String
               let icon: String
               let colors: [Color]
-              var rating: String = "4.8"
+              let rating: Double
+              let reviews: String
+              let sizeMB: Int
+              let version: String
+              let desc: String
+              let whatsNew: String
+              let permissions: [String]
+              let featured: Bool
+              func hash(into h: inout Hasher) { h.combine(id) }
+              static func == (a: StoreApp, b: StoreApp) -> Bool { a.id == b.id }
           }
 
-          let sampleApps: [StoreApp] = [
-              StoreApp(name: "WhatsApp", category: "Social Networking", icon: "message.fill", colors: [.green, .mint]),
-              StoreApp(name: "Instagram", category: "Photo & Video", icon: "camera.fill", colors: [.purple, .pink]),
-              StoreApp(name: "YouTube", category: "Entertainment", icon: "play.rectangle.fill", colors: [.red, .orange]),
-              StoreApp(name: "Spotify", category: "Music", icon: "music.note", colors: [.green, .black]),
-              StoreApp(name: "Telegram", category: "Social Networking", icon: "paperplane.fill", colors: [.blue, .cyan]),
-              StoreApp(name: "CapCut", category: "Video Editing", icon: "scissors", colors: [.black, .gray]),
-              StoreApp(name: "Snapchat", category: "Photo & Video", icon: "bolt.fill", colors: [.yellow, .orange]),
-              StoreApp(name: "X", category: "News", icon: "xmark", colors: [.black, .indigo]),
-              StoreApp(name: "Maps Pro", category: "Navigation", icon: "map.fill", colors: [.teal, .blue]),
-              StoreApp(name: "Notes+", category: "Productivity", icon: "note.text", colors: [.orange, .yellow])
-          ]
+          enum DLState: String {
+              case downloading = "Downloading"
+              case paused = "Paused"
+              case installing = "Installing"
+              case installed = "Installed"
+              case failed = "Failed"
+              case canceled = "Canceled"
+          }
 
-          let sampleGames: [StoreApp] = [
-              StoreApp(name: "Subway Surfers", category: "Action", icon: "figure.run", colors: [.orange, .red]),
-              StoreApp(name: "Candy Crush Saga", category: "Puzzle", icon: "circle.grid.3x3.fill", colors: [.pink, .purple]),
-              StoreApp(name: "PUBG Mobile", category: "Battle Royale", icon: "scope", colors: [.brown, .black]),
-              StoreApp(name: "Free Fire MAX", category: "Action", icon: "flame.fill", colors: [.red, .yellow]),
-              StoreApp(name: "Ludo King", category: "Board", icon: "dice.fill", colors: [.blue, .purple]),
-              StoreApp(name: "Temple Run 2", category: "Adventure", icon: "figure.hiking", colors: [.green, .brown]),
-              StoreApp(name: "Clash of Clans", category: "Strategy", icon: "shield.fill", colors: [.yellow, .brown]),
-              StoreApp(name: "8 Ball Pool", category: "Sports", icon: "circle.fill", colors: [.green, .black])
-          ]
+          struct DownloadItem: Identifiable {
+              let id = UUID()
+              let app: StoreApp
+              var progress: Double
+              var speed: Double
+              var state: DLState
+              var date: Date = Date()
+          }
 
-          struct RootView: View {
-              var body: some View {
-                  TabView {
-                      TodayView()
-                          .tabItem { Label("Today", systemImage: "doc.text.image") }
-                      ChartsView(title: "Games", apps: sampleGames)
-                          .tabItem { Label("Games", systemImage: "gamecontroller.fill") }
-                      ChartsView(title: "Apps", apps: sampleApps)
-                          .tabItem { Label("Apps", systemImage: "square.grid.2x2.fill") }
-                      SearchView()
-                          .tabItem { Label("Search", systemImage: "magnifyingglass") }
+          final class StoreModel: ObservableObject {
+              @Published var downloads: [DownloadItem] = []
+              @Published var toast: String? = nil
+              private var timer: Timer?
+              private var toastTimer: Timer?
+
+              func showToast(_ text: String) {
+                  DispatchQueue.main.async { self.toast = text }
+                  toastTimer?.invalidate()
+                  toastTimer = Timer.scheduledTimer(withTimeInterval: 2.4, repeats: false) { _ in
+                      DispatchQueue.main.async { self.toast = nil }
                   }
-                  .tint(.blue)
+              }
+
+              func item(for app: StoreApp) -> DownloadItem? {
+                  downloads.first { $0.app.id == app.id && [.downloading, .paused, .installing, .installed].contains($0.state) }
+              }
+
+              func start(_ app: StoreApp) {
+                  if let existing = item(for: app) {
+                      if existing.state == .paused { resume(existing.id) }
+                      return
+                  }
+                  downloads.insert(DownloadItem(app: app, progress: 0, speed: Double.random(in: 0.8...2.4), state: .downloading), at: 0)
+                  ensureTimer()
+                  showToast("Downloading \(app.name)")
+              }
+
+              func pause(_ id: UUID) { setState(id, .paused) }
+              func resume(_ id: UUID) { setState(id, .downloading); ensureTimer() }
+
+              func cancel(_ id: UUID) {
+                  guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
+                  downloads[i].state = .canceled
+                  downloads[i].progress = 0
+                  showToast("Download canceled")
+              }
+
+              func retry(_ id: UUID) {
+                  guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
+                  downloads[i].state = .downloading
+                  downloads[i].progress = 0
+                  ensureTimer()
+              }
+
+              func removeRecord(_ id: UUID) { downloads.removeAll { $0.id == id } }
+              func clearHistory() {
+                  downloads.removeAll { [.installed, .canceled, .failed].contains($0.state) }
+                  showToast("History cleared")
+              }
+
+              private func setState(_ id: UUID, _ s: DLState) {
+                  guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
+                  downloads[i].state = s
+              }
+
+              private func ensureTimer() {
+                  guard timer == nil else { return }
+                  timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+                      DispatchQueue.main.async { self.tick() }
+                  }
+              }
+
+              private func tick() {
+                  var anyActive = false
+                  for i in downloads.indices {
+                      guard downloads[i].state == .downloading || downloads[i].state == .installing else { continue }
+                      anyActive = true
+                      if downloads[i].state == .downloading {
+                          let step = downloads[i].speed * 0.25 / Double(downloads[i].app.sizeMB)
+                          downloads[i].progress = min(1.0, downloads[i].progress + step)
+                          if downloads[i].progress >= 1.0 {
+                              downloads[i].state = .installing
+                              downloads[i].progress = 0
+                          }
+                      } else {
+                          downloads[i].progress = min(1.0, downloads[i].progress + 0.2)
+                          if downloads[i].progress >= 1.0 {
+                              downloads[i].state = .installed
+                              showToast("\(downloads[i].app.name) installed (demo)")
+                          }
+                      }
+                  }
+                  if !anyActive { timer?.invalidate(); timer = nil }
+              }
+          }
+
+          func mkApp(_ name: String, _ dev: String, _ cat: String, _ icon: String, _ colors: [Color], _ rating: Double, _ reviews: String, _ sizeMB: Int, _ version: String, _ desc: String, _ whatsNew: String, _ perms: [String], _ featured: Bool) -> StoreApp {
+              StoreApp(name: name, developer: dev, category: cat, icon: icon, colors: colors, rating: rating, reviews: reviews, sizeMB: sizeMB, version: version, desc: desc, whatsNew: whatsNew, permissions: perms, featured: featured)
+          }
+
+          let catalogue: [StoreApp] = [
+              mkApp("Photo Prism", "DDE Labs", "Photo & Video", "camera.aperture", [.purple, .pink], 4.8, "12K", 48, "3.2.1", "A beautiful photo editor with one-tap filters, curves, and retouch tools. Designed for creators who want pro results in seconds.", "New glass filters, faster exports, bug fixes.", ["Photos", "Camera"], true),
+              mkApp("Task Flow", "Nova Works", "Productivity", "checklist", [.blue, .cyan], 4.6, "8.2K", 22, "2.0.4", "Plan your day with smart lists, reminders, and focus timers. Syncs across all your devices.", "Widgets and dark mode polish.", ["Notifications"], true),
+              mkApp("Music Wave", "PixelCraft", "Entertainment", "waveform", [.orange, .red], 4.7, "31K", 65, "5.1.0", "Stream unlimited music with spatial audio and offline playlists.", "New equalizer presets.", ["Storage", "Notifications"], true),
+              mkApp("Chat Bubble", "DDE Labs", "Social Media", "bubble.left.and.bubble.right.fill", [.green, .mint], 4.5, "19K", 38, "4.4.2", "Fast, private messaging with groups, stickers, and voice notes.", "Voice note waveforms.", ["Contacts", "Microphone", "Notifications"], false),
+              mkApp("Fit Track", "Healthify Demo", "Utilities", "figure.run", [.teal, .green], 4.4, "5.1K", 30, "1.9.0", "Track workouts, steps, and sleep with gentle daily goals.", "New streaks view.", ["Motion & Fitness", "Notifications"], false),
+              mkApp("Cloud Notes", "Nova Works", "Productivity", "note.text", [.indigo, .blue], 4.6, "9.7K", 18, "3.0.1", "Notes that sync everywhere, with sketches, checklists, and folders.", "Handwriting search.", ["Storage"], false),
+              mkApp("Pixel Paint", "PixelCraft", "Photo & Video", "paintbrush.fill", [.pink, .orange], 4.3, "3.4K", 54, "2.7.3", "Draw, paint, and animate with layers and 200+ brushes.", "Time-lapse export.", ["Photos"], false),
+              mkApp("Read Wise", "DDE Labs", "Productivity", "book.fill", [.brown, .orange], 4.7, "6.8K", 26, "1.4.0", "Save articles and highlights, read later without distractions.", "Speed reading mode.", [], false),
+              mkApp("Space Runner", "Galaxy Demo", "Games", "airplane", [.indigo, .purple], 4.5, "44K", 120, "6.2.0", "Dodge asteroids and upgrade your ship in this endless space runner.", "New galaxy map.", [], true),
+              mkApp("Puzzle Pop", "Galaxy Demo", "Games", "circle.grid.3x3.fill", [.mint, .blue], 4.4, "27K", 85, "4.0.2", "Match, pop, and combo through 2,000 relaxing puzzles.", "100 new levels.", [], false),
+              mkApp("Castle Siege", "Galaxy Demo", "Games", "shield.lefthalf.filled", [.gray, .black], 4.6, "15K", 210, "2.3.5", "Build your kingdom, train armies, and siege rival castles.", "Clan wars season 4.", ["Notifications"], false),
+              mkApp("Weather Glass", "Nova Works", "Utilities", "cloud.sun.fill", [.cyan, .blue], 4.5, "7.9K", 15, "1.2.2", "Hyperlocal forecasts with stunning liquid-glass widgets.", "Radar layer.", ["Location", "Notifications"], false),
+              mkApp("File Vault", "DDE Labs", "Utilities", "folder.fill", [.gray, .blue], 4.2, "2.1K", 12, "1.0.8", "Encrypt and organize your files with Face ID protection.", "Faster indexing.", ["Storage", "Face ID"], false),
+              mkApp("Stream Box", "PixelCraft", "Entertainment", "play.tv.fill", [.red, .black], 4.6, "52K", 74, "7.1.0", "Movies and shows in 4K with offline downloads.", "New kids mode.", ["Storage"], false),
+              mkApp("Habit Spark", "Healthify Demo", "Productivity", "flame.fill", [.orange, .yellow], 4.8, "11K", 19, "2.2.0", "Build habits that stick with tiny daily wins and streaks.", "Shared streaks.", ["Notifications"], false),
+              mkApp("Meme Maker", "Galaxy Demo", "Entertainment", "face.smiling", [.yellow, .green], 4.1, "4.4K", 33, "1.5.6", "Turn any photo into a meme in seconds with smart captions.", "New templates.", ["Photos"], false)
+          ]
+
+          let categoryList = ["Popular Apps", "Featured Apps", "Recently Added", "Productivity", "Social Media", "Entertainment", "Utilities", "Games"]
+
+          struct GlassCard<Content: View>: View {
+              @ViewBuilder var content: Content
+              var body: some View {
+                  content
+                      .padding(14)
+                      .background(.ultraThinMaterial)
+                      .cornerRadius(20)
+                      .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.35), lineWidth: 1))
+                      .shadow(color: .black.opacity(0.10), radius: 10, y: 4)
               }
           }
 
@@ -77,192 +195,661 @@ jobs:
               let app: StoreApp
               var size: CGFloat = 56
               var body: some View {
-                  RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
+                  RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
                       .fill(LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
                       .frame(width: size, height: size)
-                      .overlay(Image(systemName: app.icon).font(.system(size: size * 0.45)).foregroundColor(.white))
-                      .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
+                      .overlay(Image(systemName: app.icon).font(.system(size: size * 0.42)).foregroundColor(.white))
+                      .overlay(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).stroke(.white.opacity(0.4), lineWidth: 1))
+                      .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
               }
           }
 
-          struct GetButton: View {
-              @State private var state = 0
+          struct Stars: View {
+              let rating: Double
               var body: some View {
-                  Button(action: {
-                      if state == 0 {
-                          state = 1
-                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { state = 2 }
+                  HStack(spacing: 2) {
+                      ForEach(0..<5) { i in
+                          Image(systemName: Double(i) < rating.rounded(.down) ? "star.fill" : (Double(i) < rating ? "star.lefthalf.filled" : "star"))
+                              .font(.caption2)
+                              .foregroundColor(.orange)
                       }
-                  }) {
+                  }
+              }
+          }
+
+          struct RootView: View {
+              @EnvironmentObject var store: StoreModel
+              @State private var tab = 0
+              var body: some View {
+                  ZStack(alignment: .bottom) {
                       Group {
-                          if state == 0 {
-                              Text("GET").font(.subheadline.bold()).foregroundColor(.blue)
-                          } else if state == 1 {
-                              ProgressView().progressViewStyle(.circular).scaleEffect(0.7)
-                          } else {
-                              Text("OPEN").font(.subheadline.bold()).foregroundColor(.blue)
+                          switch tab {
+                          case 0: DiscoverView()
+                          case 1: SearchView()
+                          case 2: DownloadsView()
+                          default: ProfileView()
                           }
                       }
-                      .frame(width: 74, height: 30)
-                      .background(.ultraThinMaterial)
-                      .cornerRadius(15)
-                      .overlay(RoundedRectangle(cornerRadius: 15).stroke(.white.opacity(0.6), lineWidth: 1))
-                      .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                      .frame(maxWidth: .infinity, maxHeight: .infinity)
+                      FloatingBar(tab: $tab)
+                          .padding(.horizontal, 24)
+                          .padding(.bottom, 10)
+                      if let toast = store.toast {
+                          VStack {
+                              Spacer()
+                              Text(toast)
+                                  .font(.subheadline.bold())
+                                  .padding(.horizontal, 20)
+                                  .padding(.vertical, 12)
+                                  .background(.ultraThinMaterial)
+                                  .cornerRadius(24)
+                                  .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                                  .shadow(radius: 8)
+                                  .padding(.bottom, 96)
+                          }
+                          .transition(.move(edge: .bottom).combined(with: .opacity))
+                          .animation(.spring(response: 0.4), value: store.toast)
+                          .allowsHitTesting(false)
+                      }
+                  }
+              }
+          }
+
+          struct FloatingBar: View {
+              @Binding var tab: Int
+              let items: [(String, String)] = [("Discover", "safari"), ("Search", "magnifyingglass"), ("Downloads", "arrow.down.circle"), ("Profile", "person.crop.circle")]
+              var body: some View {
+                  HStack {
+                      ForEach(0..<items.count, id: \.self) { i in
+                          Button(action: { withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { tab = i } }) {
+                              VStack(spacing: 3) {
+                                  Image(systemName: items[i].1 + (tab == i ? ".fill" : ""))
+                                      .font(.system(size: 19, weight: .semibold))
+                                  Text(items[i].0).font(.caption2)
+                              }
+                              .foregroundColor(tab == i ? .accentColor : .secondary)
+                              .frame(maxWidth: .infinity)
+                              .padding(.vertical, 8)
+                              .background(tab == i ? Color.accentColor.opacity(0.12) : Color.clear)
+                              .cornerRadius(14)
+                          }
+                          .buttonStyle(.plain)
+                      }
+                  }
+                  .padding(6)
+                  .background(.ultraThinMaterial)
+                  .cornerRadius(22)
+                  .overlay(RoundedRectangle(cornerRadius: 22).stroke(.white.opacity(0.4), lineWidth: 1))
+                  .shadow(color: .black.opacity(0.15), radius: 12, y: 6)
+              }
+          }
+
+          struct DiscoverView: View {
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          VStack(alignment: .leading, spacing: 22) {
+                              FeaturedBanner(app: catalogue.first { $0.featured } ?? catalogue[0])
+                              CategoriesRow()
+                              AppCarousel(title: "Popular Apps", apps: Array(catalogue.prefix(8)))
+                              AppCarousel(title: "Featured Apps", apps: catalogue.filter { $0.featured })
+                              AppCarousel(title: "Recently Added", apps: Array(catalogue.suffix(6)))
+                              Spacer().frame(height: 90)
+                          }
+                          .padding(.top, 8)
+                      }
+                      .navigationTitle("Discover")
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              NavigationLink(destination: ProfileView()) {
+                                  Image(systemName: "person.crop.circle").font(.title3)
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+
+          struct FeaturedBanner: View {
+              @State private var shine = false
+              let app: StoreApp
+              var body: some View {
+                  NavigationLink(destination: AppDetailView(app: app)) {
+                      ZStack(alignment: .bottomLeading) {
+                          LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                          Image(systemName: app.icon)
+                              .font(.system(size: 130))
+                              .foregroundColor(.white.opacity(0.25))
+                              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                              .padding(24)
+                          LinearGradient(colors: [.white.opacity(0), .white.opacity(0.28), .white.opacity(0)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                              .frame(width: 500)
+                              .rotationEffect(.degrees(18))
+                              .offset(x: shine ? 420 : -420)
+                              .allowsHitTesting(false)
+                          VStack(alignment: .leading, spacing: 8) {
+                              Spacer()
+                              Text("FEATURED").font(.caption.bold()).foregroundColor(.white.opacity(0.85))
+                              Text(app.name).font(.title.bold()).foregroundColor(.white)
+                              Text(app.desc).font(.subheadline).foregroundColor(.white.opacity(0.9)).lineLimit(2)
+                              HStack {
+                                  AppIcon(app: app, size: 44)
+                                  VStack(alignment: .leading) {
+                                      Text(app.name).font(.subheadline.bold()).foregroundColor(.white)
+                                      Text(app.category).font(.caption).foregroundColor(.white.opacity(0.85))
+                                  }
+                                  Spacer()
+                                  GetButton(app: app, light: true)
+                              }
+                              .padding(10)
+                              .background(.ultraThinMaterial)
+                              .cornerRadius(16)
+                          }
+                          .padding(18)
+                      }
+                      .frame(height: 330)
+                      .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                      .overlay(RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.35), lineWidth: 1))
+                      .shadow(color: app.colors.first?.opacity(0.4) ?? .clear, radius: 14, y: 8)
+                      .padding(.horizontal)
                   }
                   .buttonStyle(.plain)
+                  .onAppear {
+                      withAnimation(.easeInOut(duration: 3.4).repeatForever(autoreverses: false)) { shine = true }
+                  }
+              }
+          }
+
+          struct CategoriesRow: View {
+              var body: some View {
+                  VStack(alignment: .leading, spacing: 10) {
+                      Text("Categories").font(.title3.bold()).padding(.horizontal)
+                      ScrollView(.horizontal, showsIndicators: false) {
+                          HStack(spacing: 10) {
+                              ForEach(categoryList, id: \.self) { cat in
+                                  NavigationLink(destination: CategoryView(category: cat)) {
+                                      Text(cat)
+                                          .font(.subheadline.bold())
+                                          .padding(.horizontal, 16)
+                                          .padding(.vertical, 9)
+                                          .background(.ultraThinMaterial)
+                                          .cornerRadius(18)
+                                          .overlay(Capsule().stroke(.white.opacity(0.35), lineWidth: 1))
+                                  }
+                                  .buttonStyle(.plain)
+                              }
+                          }
+                          .padding(.horizontal)
+                      }
+                  }
+              }
+          }
+
+          struct CategoryView: View {
+              let category: String
+              var apps: [StoreApp] {
+                  switch category {
+                  case "Popular Apps": return catalogue
+                  case "Featured Apps": return catalogue.filter { $0.featured }
+                  case "Recently Added": return Array(catalogue.suffix(6))
+                  default: return catalogue.filter { $0.category == category }
+                  }
+              }
+              var body: some View {
+                  List(apps) { app in
+                      NavigationLink(destination: AppDetailView(app: app)) {
+                          AppRow(app: app)
+                      }
+                  }
+                  .listStyle(.plain)
+                  .navigationTitle(category)
+              }
+          }
+
+          struct AppCarousel: View {
+              let title: String
+              let apps: [StoreApp]
+              var body: some View {
+                  VStack(alignment: .leading, spacing: 10) {
+                      Text(title).font(.title3.bold()).padding(.horizontal)
+                      ScrollView(.horizontal, showsIndicators: false) {
+                          HStack(spacing: 14) {
+                              ForEach(apps) { app in
+                                  NavigationLink(destination: AppDetailView(app: app)) {
+                                      GlassCard {
+                                          VStack(alignment: .leading, spacing: 8) {
+                                              AppIcon(app: app, size: 52)
+                                              Text(app.name).font(.subheadline.bold()).lineLimit(1)
+                                              Stars(rating: app.rating)
+                                              GetButton(app: app)
+                                          }
+                                          .frame(width: 120, alignment: .leading)
+                                      }
+                                  }
+                                  .buttonStyle(.plain)
+                              }
+                          }
+                          .padding(.horizontal)
+                      }
+                  }
               }
           }
 
           struct AppRow: View {
               let app: StoreApp
-              var rank: Int? = nil
               var body: some View {
                   HStack(spacing: 12) {
-                      if let rank = rank {
-                          Text("\(rank)").font(.title3.bold()).foregroundColor(.secondary).frame(width: 22)
-                      }
                       AppIcon(app: app)
-                      VStack(alignment: .leading, spacing: 2) {
+                      VStack(alignment: .leading, spacing: 3) {
                           Text(app.name).font(.headline)
-                          Text(app.category).font(.caption).foregroundColor(.secondary)
-                          HStack(spacing: 3) {
-                              Image(systemName: "star.fill").font(.caption2).foregroundColor(.orange)
-                              Text(app.rating).font(.caption).foregroundColor(.secondary)
+                          Text("\(app.developer) - \(app.category)").font(.caption).foregroundColor(.secondary)
+                          HStack(spacing: 4) {
+                              Stars(rating: app.rating)
+                              Text(app.reviews).font(.caption2).foregroundColor(.secondary)
                           }
                       }
                       Spacer()
-                      GetButton()
+                      GetButton(app: app)
                   }
-                  .padding(.vertical, 8)
-                  .padding(.horizontal, 6)
-                  .background(.ultraThinMaterial)
-                  .cornerRadius(14)
+                  .padding(.vertical, 4)
               }
           }
 
-          struct FeatureCard: View {
-              @State private var shine = false
-              let eyebrow: String
-              let title: String
-              let subtitle: String
+          struct GetButton: View {
+              @EnvironmentObject var store: StoreModel
               let app: StoreApp
-              let colors: [Color]
+              var light: Bool = false
               var body: some View {
-                  ZStack(alignment: .bottomLeading) {
-                      LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                      VStack(alignment: .leading, spacing: 6) {
-                          Spacer()
-                          Image(systemName: app.icon)
-                              .font(.system(size: 90))
-                              .foregroundColor(.white.opacity(0.35))
-                              .frame(maxWidth: .infinity, alignment: .trailing)
-                              .padding(.trailing, 20)
-                          Spacer()
+                  let item = store.item(for: app)
+                  Button(action: {
+                      if let item = item, item.state == .installed {
+                          store.showToast("Demo mode - apps cannot really run inside the sandbox")
+                      } else {
+                          store.start(app)
                       }
-                      VStack(alignment: .leading, spacing: 6) {
-                          Spacer()
-                          Text(eyebrow).font(.caption.bold()).foregroundColor(.white.opacity(0.85))
-                          Text(title).font(.title2.bold()).foregroundColor(.white)
-                          Text(subtitle).font(.subheadline).foregroundColor(.white.opacity(0.9))
-                          HStack {
-                              AppIcon(app: app, size: 40)
-                              VStack(alignment: .leading) {
-                                  Text(app.name).font(.subheadline.bold()).foregroundColor(.white)
-                                  Text(app.category).font(.caption2).foregroundColor(.white.opacity(0.85))
+                  }) {
+                      Group {
+                          if let item = item {
+                              switch item.state {
+                              case .downloading:
+                                  ProgressView(value: item.progress).progressViewStyle(.circular)
+                              case .paused:
+                                  Image(systemName: "play.fill").font(.caption.bold())
+                              case .installing:
+                                  ProgressView().progressViewStyle(.circular)
+                              case .installed:
+                                  Text("OPEN").font(.caption.bold())
+                              default:
+                                  Text("GET").font(.caption.bold())
                               }
-                              Spacer()
-                              GetButton()
-                          }
-                          .padding(10)
-                          .background(.ultraThinMaterial)
-                          .cornerRadius(14)
-                      }
-                      .padding(16)
-                  }
-                  .frame(height: 340)
-                  .overlay(
-                      LinearGradient(colors: [.white.opacity(0), .white.opacity(0.28), .white.opacity(0)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                          .frame(width: 500)
-                          .rotationEffect(.degrees(18))
-                          .offset(x: shine ? 420 : -420)
-                          .allowsHitTesting(false)
-                  )
-                  .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                  .onAppear {
-                      withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: false)) { shine = true }
-                  }
-                  .cornerRadius(18)
-                  .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
-                  .padding(.horizontal)
-              }
-          }
-
-          struct TodayView: View {
-              var today: String {
-                  let f = DateFormatter()
-                  f.dateFormat = "EEEE, d MMMM"
-                  return f.string(from: Date()).uppercased()
-              }
-              var body: some View {
-                  NavigationStack {
-                      ScrollView {
-                          VStack(alignment: .leading, spacing: 20) {
-                              Text(today).font(.caption.bold()).foregroundColor(.secondary).padding(.horizontal)
-                              FeatureCard(eyebrow: "NOW TRENDING", title: "Editors' Choice", subtitle: "The apps everyone is talking about", app: sampleApps[1], colors: [.indigo, .purple])
-                              FeatureCard(eyebrow: "GAME OF THE DAY", title: "Play. Win. Repeat.", subtitle: "Top picks for your weekend", app: sampleGames[3], colors: [.pink, .orange])
-                              Text("Must-Have Apps").font(.title3.bold()).padding(.horizontal)
-                              ForEach(Array(sampleApps.prefix(4))) { app in
-                                  AppRow(app: app).padding(.horizontal)
-                              }
-                          }
-                          .padding(.vertical)
-                      }
-                      .navigationTitle("Today")
-                  }
-              }
-          }
-
-          struct ChartsView: View {
-              let title: String
-              let apps: [StoreApp]
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section(header: Text("Top Free \(title)").font(.headline).textCase(nil)) {
-                              ForEach(Array(apps.enumerated()), id: \.element.id) { index, app in
-                                  AppRow(app: app, rank: index + 1)
-                              }
+                          } else {
+                              Text("GET").font(.caption.bold())
                           }
                       }
-                      .listStyle(.plain)
-                      .navigationTitle(title)
+                      .foregroundColor(light ? .white : .accentColor)
+                      .frame(width: 72, height: 30)
+                      .background(light ? AnyShapeStyle(.white.opacity(0.25)) : AnyShapeStyle(.ultraThinMaterial))
+                      .cornerRadius(15)
+                      .overlay(RoundedRectangle(cornerRadius: 15).stroke(.white.opacity(light ? 0.7 : 0.4), lineWidth: 1))
                   }
+                  .buttonStyle(.plain)
               }
           }
 
           struct SearchView: View {
+              @AppStorage("dde_recent") private var recentRaw: String = ""
               @State private var query = ""
-              let trending = ["whatsapp", "photo editor", "ludo king", "capcut templates", "bgmi", "spotify", "video downloader", "wallpapers 4k"]
+
+              var recent: [String] { recentRaw.isEmpty ? [] : recentRaw.components(separatedBy: "|") }
+
+              var results: [StoreApp] {
+                  let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+                  guard !q.isEmpty else { return [] }
+                  return catalogue.filter {
+                      $0.name.lowercased().contains(q) ||
+                      $0.category.lowercased().contains(q) ||
+                      $0.developer.lowercased().contains(q)
+                  }
+              }
+
+              func addRecent(_ term: String) {
+                  var list = recent.filter { $0 != term }
+                  list.insert(term, at: 0)
+                  recentRaw = Array(list.prefix(8)).joined(separator: "|")
+              }
+
               var body: some View {
                   NavigationStack {
-                      List {
-                          Section(header: Text("Trending").font(.headline).textCase(nil)) {
-                              ForEach(trending, id: \.self) { term in
-                                  HStack(spacing: 12) {
-                                      Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-                                      Text(term)
+                      VStack(spacing: 0) {
+                          HStack(spacing: 10) {
+                              Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                              TextField("Apps, games, developers", text: $query, onCommit: {
+                                  if !query.isEmpty { addRecent(query) }
+                              })
+                              .autocapitalization(.none)
+                              .disableAutocorrection(true)
+                              if !query.isEmpty {
+                                  Button(action: { query = "" }) {
+                                      Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
                                   }
                               }
                           }
-                          Section(header: Text("Suggested").font(.headline).textCase(nil)) {
-                              ForEach(Array(sampleApps.prefix(3))) { app in
-                                  AppRow(app: app)
+                          .padding(12)
+                          .background(.ultraThinMaterial)
+                          .cornerRadius(16)
+                          .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 1))
+                          .padding()
+
+                          if query.isEmpty {
+                              List {
+                                  if !recent.isEmpty {
+                                      Section(header: HStack {
+                                          Text("Recent Searches")
+                                          Spacer()
+                                          Button("Clear") { recentRaw = "" }.font(.caption)
+                                      }.textCase(nil)) {
+                                          ForEach(recent, id: \.self) { term in
+                                              Button(action: { query = term }) {
+                                                  HStack {
+                                                      Image(systemName: "clock").foregroundColor(.secondary)
+                                                      Text(term).foregroundColor(.primary)
+                                                  }
+                                              }
+                                          }
+                                      }
+                                  }
+                                  Section(header: Text("Trending").textCase(nil)) {
+                                      ForEach(["photo editor", "games", "music", "notes", "fitness"], id: \.self) { term in
+                                          Button(action: { query = term; addRecent(term) }) {
+                                              HStack {
+                                                  Image(systemName: "arrow.up.right").foregroundColor(.secondary)
+                                                  Text(term).foregroundColor(.primary)
+                                              }
+                                          }
+                                      }
+                                  }
                               }
+                              .listStyle(.plain)
+                          } else if results.isEmpty {
+                              VStack(spacing: 12) {
+                                  Spacer()
+                                  Image(systemName: "questionmark.app.dashed").font(.system(size: 52)).foregroundColor(.secondary)
+                                  Text("No results for \"\(query)\"").font(.headline)
+                                  Text("Try a different name or category.").font(.subheadline).foregroundColor(.secondary)
+                                  Spacer()
+                              }
+                              .frame(maxWidth: .infinity)
+                          } else {
+                              List(results) { app in
+                                  NavigationLink(destination: AppDetailView(app: app)) {
+                                      AppRow(app: app)
+                                  }
+                              }
+                              .listStyle(.plain)
+                          }
+                          Spacer().frame(height: 80)
+                      }
+                      .navigationTitle("Search")
+                  }
+              }
+          }
+
+          struct DownloadsView: View {
+              @EnvironmentObject var store: StoreModel
+              var active: [DownloadItem] { store.downloads.filter { [.downloading, .paused, .installing].contains($0.state) } }
+              var history: [DownloadItem] { store.downloads.filter { [.installed, .canceled, .failed].contains($0.state) } }
+              var body: some View {
+                  NavigationStack {
+                      Group {
+                          if store.downloads.isEmpty {
+                              VStack(spacing: 12) {
+                                  Spacer()
+                                  Image(systemName: "arrow.down.circle").font(.system(size: 52)).foregroundColor(.secondary)
+                                  Text("No downloads yet").font(.headline)
+                                  Text("Tap GET on any app and it will show up here.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal, 40)
+                                  Spacer()
+                              }
+                              .frame(maxWidth: .infinity)
+                          } else {
+                              List {
+                                  if !active.isEmpty {
+                                      Section(header: Text("Active").textCase(nil)) {
+                                          ForEach(active) { item in DownloadRow(item: item) }
+                                      }
+                                  }
+                                  if !history.isEmpty {
+                                      Section(header: HStack {
+                                          Text("History")
+                                          Spacer()
+                                          Button("Clear") { store.clearHistory() }.font(.caption)
+                                      }.textCase(nil)) {
+                                          ForEach(history) { item in DownloadRow(item: item) }
+                                      }
+                                  }
+                              }
+                              .listStyle(.plain)
                           }
                       }
-                      .listStyle(.plain)
-                      .navigationTitle("Search")
-                      .searchable(text: $query, prompt: "Games, apps, stories, and more")
+                      .navigationTitle("Downloads")
+                  }
+              }
+          }
+
+          struct DownloadRow: View {
+              @EnvironmentObject var store: StoreModel
+              let item: DownloadItem
+              var body: some View {
+                  HStack(spacing: 12) {
+                      AppIcon(app: item.app, size: 48)
+                      VStack(alignment: .leading, spacing: 4) {
+                          Text(item.app.name).font(.headline)
+                          if item.state == .downloading || item.state == .installing {
+                              ProgressView(value: item.progress)
+                              Text(item.state == .downloading
+                                   ? "\(Int(item.progress * 100))% of \(item.app.sizeMB) MB - \(String(format: "%.1f", item.speed)) MB/s"
+                                   : "Installing...").font(.caption).foregroundColor(.secondary)
+                          } else {
+                              Text(item.state.rawValue + (item.state == .installed ? " (demo)" : ""))
+                                  .font(.caption)
+                                  .foregroundColor(item.state == .installed ? .green : .secondary)
+                          }
+                      }
+                      Spacer()
+                      HStack(spacing: 14) {
+                          switch item.state {
+                          case .downloading:
+                              Button(action: { store.pause(item.id) }) { Image(systemName: "pause.fill") }
+                              Button(action: { store.cancel(item.id) }) { Image(systemName: "xmark") }
+                          case .paused:
+                              Button(action: { store.resume(item.id) }) { Image(systemName: "play.fill") }
+                              Button(action: { store.cancel(item.id) }) { Image(systemName: "xmark") }
+                          case .failed:
+                              Button(action: { store.retry(item.id) }) { Image(systemName: "arrow.clockwise") }
+                          case .installed:
+                              Button(action: { store.showToast("Demo mode - apps cannot really run inside the sandbox") }) { Text("OPEN").font(.caption.bold()) }
+                          default:
+                              EmptyView()
+                          }
+                      }
+                      .foregroundColor(.accentColor)
+                  }
+                  .padding(.vertical, 4)
+              }
+          }
+
+          struct InfoChip: View {
+              let value: String
+              let label: String
+              var body: some View {
+                  VStack(spacing: 2) {
+                      Text(value).font(.subheadline.bold())
+                      Text(label).font(.caption2).foregroundColor(.secondary)
+                  }
+                  .frame(maxWidth: .infinity)
+                  .padding(.vertical, 10)
+                  .background(.ultraThinMaterial)
+                  .cornerRadius(14)
+                  .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.3), lineWidth: 1))
+              }
+          }
+
+          struct AppDetailView: View {
+              @EnvironmentObject var store: StoreModel
+              let app: StoreApp
+              var body: some View {
+                  ScrollView {
+                      VStack(alignment: .leading, spacing: 20) {
+                          HStack(spacing: 16) {
+                              AppIcon(app: app, size: 92)
+                              VStack(alignment: .leading, spacing: 6) {
+                                  Text(app.name).font(.title2.bold())
+                                  Text(app.developer).font(.subheadline).foregroundColor(.accentColor)
+                                  GetButton(app: app)
+                              }
+                              Spacer()
+                          }
+                          .padding(.horizontal)
+
+                          HStack(spacing: 10) {
+                              InfoChip(value: String(format: "%.1f", app.rating), label: "Rating")
+                              InfoChip(value: app.reviews, label: "Reviews")
+                              InfoChip(value: "\(app.sizeMB) MB", label: "Size")
+                              InfoChip(value: "v\(app.version)", label: "Version")
+                          }
+                          .padding(.horizontal)
+
+                          VStack(alignment: .leading, spacing: 10) {
+                              Text("Preview").font(.title3.bold())
+                              ScrollView(.horizontal, showsIndicators: false) {
+                                  HStack(spacing: 12) {
+                                      ForEach(0..<3, id: \.self) { i in
+                                          ZStack {
+                                              LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                                              Image(systemName: app.icon).font(.system(size: 44)).foregroundColor(.white.opacity(0.8))
+                                          }
+                                          .frame(width: 170, height: 300)
+                                          .cornerRadius(18)
+                                          .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.35), lineWidth: 1))
+                                      }
+                                  }
+                                  .padding(.horizontal)
+                              }
+                          }
+                          .padding(.horizontal, 0)
+                          .padding(.leading)
+
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("About").font(.title3.bold())
+                              Text(app.desc).font(.subheadline).foregroundColor(.secondary)
+                          }
+                          .padding(.horizontal)
+
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("What's New").font(.title3.bold())
+                              Text("Version \(app.version)").font(.caption).foregroundColor(.secondary)
+                              Text(app.whatsNew).font(.subheadline).foregroundColor(.secondary)
+                          }
+                          .padding(.horizontal)
+
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("Ratings & Reviews").font(.title3.bold())
+                              HStack(spacing: 16) {
+                                  Text(String(format: "%.1f", app.rating)).font(.system(size: 48, weight: .bold))
+                                  VStack(alignment: .leading) {
+                                      Stars(rating: app.rating)
+                                      Text("\(app.reviews) ratings").font(.caption).foregroundColor(.secondary)
+                                  }
+                              }
+                          }
+                          .padding(.horizontal)
+
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("Permissions").font(.title3.bold())
+                              if app.permissions.isEmpty {
+                                  Text("No special permissions required.").font(.subheadline).foregroundColor(.secondary)
+                              } else {
+                                  ForEach(app.permissions, id: \.self) { p in
+                                      HStack(spacing: 10) {
+                                          Image(systemName: "checkmark.shield.fill").foregroundColor(.green)
+                                          Text(p).font(.subheadline)
+                                      }
+                                  }
+                              }
+                          }
+                          .padding(.horizontal)
+
+                          Spacer().frame(height: 100)
+                      }
+                      .padding(.top, 8)
+                  }
+                  .navigationBarTitleDisplayMode(.inline)
+                  .toolbar {
+                      ToolbarItem(placement: .navigationBarTrailing) {
+                          ShareLink(item: "Check out \(app.name) on DDE Store (demo)!") {
+                              Image(systemName: "square.and.arrow.up")
+                          }
+                      }
+                  }
+              }
+          }
+
+          struct ProfileView: View {
+              @EnvironmentObject var store: StoreModel
+              @AppStorage("dde_theme") private var theme: String = "system"
+              @AppStorage("dde_wifi_only") private var wifiOnly: Bool = false
+              @AppStorage("dde_notif") private var notif: Bool = true
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section {
+                              HStack(spacing: 14) {
+                                  ZStack {
+                                      Circle().fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                      Text("R").font(.title2.bold()).foregroundColor(.white)
+                                  }
+                                  .frame(width: 56, height: 56)
+                                  VStack(alignment: .leading, spacing: 2) {
+                                      Text("Rutik").font(.headline)
+                                      Text("Demo account - sandbox only").font(.caption).foregroundColor(.secondary)
+                                  }
+                              }
+                              .padding(.vertical, 4)
+                          }
+
+                          Section(header: Text("Appearance").textCase(nil)) {
+                              Picker("Theme", selection: $theme) {
+                                  Text("System").tag("system")
+                                  Text("Light").tag("light")
+                                  Text("Dark").tag("dark")
+                              }
+                          }
+
+                          Section(header: Text("Download Preferences").textCase(nil)) {
+                              Toggle("Download on Wi-Fi only", isOn: $wifiOnly)
+                              Toggle("Download notifications", isOn: $notif)
+                          }
+
+                          Section(header: Text("Storage").textCase(nil)) {
+                              let total = store.downloads.filter { $0.state == .installed }.reduce(0) { $0 + $1.app.sizeMB }
+                              HStack {
+                                  Text("Used by installed apps (demo)")
+                                  Spacer()
+                                  Text("\(total) MB").foregroundColor(.secondary)
+                              }
+                              Button("Clear download history") { store.clearHistory() }
+                          }
+
+                          Section(header: Text("About").textCase(nil)) {
+                              HStack {
+                                  Text("DDE Store")
+                                  Spacer()
+                                  Text("v1.0.0 (iOS demo)").foregroundColor(.secondary)
+                              }
+                              Button("Privacy Policy") { store.showToast("Demo build - no data leaves this sandbox") }
+                              Button("About DDE Store") { store.showToast("DDE Store demo, built with SwiftUI") }
+                          }
+                      }
+                      .navigationTitle("Profile")
                   }
               }
           }
@@ -271,39 +858,39 @@ jobs:
         run: |
           brew install xcodegen
           cat > project.yml <<'YML'
-          name: AppStore
+          name: DDEStore
           options:
-            bundleIdPrefix: com.demo
+            bundleIdPrefix: com.ddestore
           targets:
-            AppStore:
+            DDEStore:
               type: application
               platform: iOS
               deploymentTarget: "16.0"
               sources: [Sources]
               settings:
                 base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.demo.appstoreReplica
-                  PRODUCT_NAME: AppStore
+                  PRODUCT_BUNDLE_IDENTIFIER: com.ddestore.ios
+                  PRODUCT_NAME: DDEStore
                   GENERATE_INFOPLIST_FILE: YES
                   MARKETING_VERSION: "1.0"
                   CURRENT_PROJECT_VERSION: "1"
-                  INFOPLIST_KEY_CFBundleDisplayName: App Store
+                  INFOPLIST_KEY_CFBundleDisplayName: DDE Store
           YML
           xcodegen
       - name: Build for iOS Simulator
-        run: xcodebuild -project AppStore.xcodeproj -scheme AppStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project DDEStore.xcodeproj -scheme DDEStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Zip app bundle
         run: |
           cd build/Build/Products/Release-iphonesimulator
-          zip -r "$GITHUB_WORKSPACE/AppStore-simulator.zip" AppStore.app
+          zip -r "$GITHUB_WORKSPACE/DDEStore-simulator.zip" DDEStore.app
           cd "$GITHUB_WORKSPACE"
-          unzip -l AppStore-simulator.zip
+          unzip -l DDEStore-simulator.zip
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AppStore-simulator
-          path: AppStore-simulator.zip
+          name: DDEStore-simulator
+          path: DDEStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v2.0.0 AppStore-simulator.zip --title "App Store UI Demo (iOS Simulator)" --notes "Unsigned iOS Simulator build - App Store style demo UI. Upload AppStore-simulator.zip to Appetize to run it."
+        run: gh release create v3.0.0 DDEStore-simulator.zip --title "DDE Store (iOS Simulator demo)" --notes "Unsigned iOS Simulator build - DDE Store demo with liquid glass UI. Upload DDEStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
