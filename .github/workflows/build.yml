@@ -11,1265 +11,622 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - name: Write app source
+      - name: Write project files
         run: |
-          mkdir -p Sources
-          cat > Sources/DDEGlassStore.swift <<'SWIFT'
+          mkdir -p $(dirname 'DDEGlassStore/AppsAndSearchViews.swift')
+          cat > 'DDEGlassStore/AppsAndSearchViews.swift' <<'EOF_DDEGLASSSTORE_APPSANDSEARCHVIEWS_SWIFT'
           import SwiftUI
 
-          @main
-          struct DDEStoreApp: App {
-              @StateObject private var store = StoreModel()
-              @AppStorage("dde_theme") private var theme: String = "system"
-              var body: some Scene {
-                  WindowGroup {
-                      RootView()
-                          .environmentObject(store)
-                          .preferredColorScheme(theme == "dark" ? .dark : theme == "light" ? .light : nil)
-                  }
-              }
-          }
-
-          struct StoreApp: Identifiable, Hashable {
-              let id = UUID()
-              let name: String
-              let developer: String
-              let category: String
-              let icon: String
-              let colors: [Color]
-              let rating: Double
-              let reviews: String
-              let sizeMB: Int
-              let version: String
-              let desc: String
-              let whatsNew: String
-              let permissions: [String]
-              let featured: Bool
-              func hash(into h: inout Hasher) { h.combine(id) }
-              static func == (a: StoreApp, b: StoreApp) -> Bool { a.id == b.id }
-          }
-
-          enum DLState: String {
-              case downloading = "Downloading"
-              case paused = "Paused"
-              case installing = "Installing"
-              case installed = "Installed"
-              case failed = "Failed"
-              case canceled = "Canceled"
-          }
-
-          struct DownloadItem: Identifiable {
-              let id = UUID()
-              let app: StoreApp
-              var progress: Double
-              var speed: Double
-              var state: DLState
-              var date: Date = Date()
-          }
-
-          final class StoreModel: ObservableObject {
-              @Published var downloads: [DownloadItem] = []
-              @Published var toast: String? = nil
-              @Published var saved: [String] = []
-              @Published var recentViews: [String] = []
-              private var timer: Timer?
-              private var toastTimer: Timer?
-
-              init() {
-                  saved = Self.loadList("dde_saved")
-                  recentViews = Self.loadList("dde_recent_views")
-              }
-
-              static func loadList(_ key: String) -> [String] {
-                  let raw = UserDefaults.standard.string(forKey: key) ?? ""
-                  return raw.isEmpty ? [] : raw.components(separatedBy: "|")
-              }
-
-              static func storeList(_ key: String, _ list: [String]) {
-                  UserDefaults.standard.set(list.joined(separator: "|"), forKey: key)
-              }
-
-              func isSaved(_ app: StoreApp) -> Bool { saved.contains(app.name) }
-
-              func toggleSave(_ app: StoreApp) {
-                  if isSaved(app) {
-                      saved.removeAll { $0 == app.name }
-                      showToast("Removed from Library")
-                  } else {
-                      saved.insert(app.name, at: 0)
-                      showToast("Saved to Library")
-                  }
-                  Self.storeList("dde_saved", saved)
-              }
-
-              func recordView(_ app: StoreApp) {
-                  recentViews.removeAll { $0 == app.name }
-                  recentViews.insert(app.name, at: 0)
-                  recentViews = Array(recentViews.prefix(10))
-                  Self.storeList("dde_recent_views", recentViews)
-              }
-
-              func showToast(_ text: String) {
-                  DispatchQueue.main.async { self.toast = text }
-                  toastTimer?.invalidate()
-                  toastTimer = Timer.scheduledTimer(withTimeInterval: 2.4, repeats: false) { _ in
-                      DispatchQueue.main.async { self.toast = nil }
-                  }
-              }
-
-              func item(for app: StoreApp) -> DownloadItem? {
-                  downloads.first { $0.app.id == app.id && [.downloading, .paused, .installing, .installed].contains($0.state) }
-              }
-
-              func start(_ app: StoreApp) {
-                  if let existing = item(for: app) {
-                      if existing.state == .paused { resume(existing.id) }
-                      return
-                  }
-                  downloads.insert(DownloadItem(app: app, progress: 0, speed: Double.random(in: 0.8...2.4), state: .downloading), at: 0)
-                  ensureTimer()
-                  showToast("Downloading \(app.name)")
-              }
-
-              func pause(_ id: UUID) { setState(id, .paused) }
-              func resume(_ id: UUID) { setState(id, .downloading); ensureTimer() }
-
-              func cancel(_ id: UUID) {
-                  guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
-                  downloads[i].state = .canceled
-                  downloads[i].progress = 0
-                  showToast("Download canceled")
-              }
-
-              func retry(_ id: UUID) {
-                  guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
-                  downloads[i].state = .downloading
-                  downloads[i].progress = 0
-                  ensureTimer()
-              }
-
-              func removeRecord(_ id: UUID) { downloads.removeAll { $0.id == id } }
-              func clearHistory() {
-                  downloads.removeAll { [.installed, .canceled, .failed].contains($0.state) }
-                  showToast("History cleared")
-              }
-
-              private func setState(_ id: UUID, _ s: DLState) {
-                  guard let i = downloads.firstIndex(where: { $0.id == id }) else { return }
-                  downloads[i].state = s
-              }
-
-              private func ensureTimer() {
-                  guard timer == nil else { return }
-                  timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
-                      DispatchQueue.main.async { self.tick() }
-                  }
-              }
-
-              private func tick() {
-                  var anyActive = false
-                  for i in downloads.indices {
-                      guard downloads[i].state == .downloading || downloads[i].state == .installing else { continue }
-                      anyActive = true
-                      if downloads[i].state == .downloading {
-                          let step = downloads[i].speed * 0.25 / Double(downloads[i].app.sizeMB)
-                          downloads[i].progress = min(1.0, downloads[i].progress + step)
-                          if downloads[i].progress >= 1.0 {
-                              downloads[i].state = .installing
-                              downloads[i].progress = 0
-                          }
-                      } else {
-                          downloads[i].progress = min(1.0, downloads[i].progress + 0.2)
-                          if downloads[i].progress >= 1.0 {
-                              downloads[i].state = .installed
-                              showToast("\(downloads[i].app.name) installed (demo)")
-                          }
-                      }
-                  }
-                  if !anyActive { timer?.invalidate(); timer = nil }
-              }
-          }
-
-          func mkApp(_ name: String, _ dev: String, _ cat: String, _ icon: String, _ colors: [Color], _ rating: Double, _ reviews: String, _ sizeMB: Int, _ version: String, _ desc: String, _ whatsNew: String, _ perms: [String], _ featured: Bool) -> StoreApp {
-              StoreApp(name: name, developer: dev, category: cat, icon: icon, colors: colors, rating: rating, reviews: reviews, sizeMB: sizeMB, version: version, desc: desc, whatsNew: whatsNew, permissions: perms, featured: featured)
-          }
-
-          let catalogue: [StoreApp] = [
-              mkApp("Photo Prism", "DDE Labs", "Photo & Video", "camera.aperture", [.purple, .pink], 4.8, "12K", 48, "3.2.1", "A beautiful photo editor with one-tap filters, curves, and retouch tools. Designed for creators who want pro results in seconds.", "New glass filters, faster exports, bug fixes.", ["Photos", "Camera"], true),
-              mkApp("Task Flow", "Nova Works", "Productivity", "checklist", [.blue, .cyan], 4.6, "8.2K", 22, "2.0.4", "Plan your day with smart lists, reminders, and focus timers. Syncs across all your devices.", "Widgets and dark mode polish.", ["Notifications"], true),
-              mkApp("Music Wave", "PixelCraft", "Entertainment", "waveform", [.orange, .red], 4.7, "31K", 65, "5.1.0", "Stream unlimited music with spatial audio and offline playlists.", "New equalizer presets.", ["Storage", "Notifications"], true),
-              mkApp("Chat Bubble", "DDE Labs", "Social Media", "bubble.left.and.bubble.right.fill", [.green, .mint], 4.5, "19K", 38, "4.4.2", "Fast, private messaging with groups, stickers, and voice notes.", "Voice note waveforms.", ["Contacts", "Microphone", "Notifications"], false),
-              mkApp("Fit Track", "Healthify Demo", "Utilities", "figure.run", [.teal, .green], 4.4, "5.1K", 30, "1.9.0", "Track workouts, steps, and sleep with gentle daily goals.", "New streaks view.", ["Motion & Fitness", "Notifications"], false),
-              mkApp("Cloud Notes", "Nova Works", "Productivity", "note.text", [.indigo, .blue], 4.6, "9.7K", 18, "3.0.1", "Notes that sync everywhere, with sketches, checklists, and folders.", "Handwriting search.", ["Storage"], false),
-              mkApp("Pixel Paint", "PixelCraft", "Photo & Video", "paintbrush.fill", [.pink, .orange], 4.3, "3.4K", 54, "2.7.3", "Draw, paint, and animate with layers and 200+ brushes.", "Time-lapse export.", ["Photos"], false),
-              mkApp("Read Wise", "DDE Labs", "Productivity", "book.fill", [.brown, .orange], 4.7, "6.8K", 26, "1.4.0", "Save articles and highlights, read later without distractions.", "Speed reading mode.", [], false),
-              mkApp("Space Runner", "Galaxy Demo", "Games", "airplane", [.indigo, .purple], 4.5, "44K", 120, "6.2.0", "Dodge asteroids and upgrade your ship in this endless space runner.", "New galaxy map.", [], true),
-              mkApp("Puzzle Pop", "Galaxy Demo", "Games", "circle.grid.3x3.fill", [.mint, .blue], 4.4, "27K", 85, "4.0.2", "Match, pop, and combo through 2,000 relaxing puzzles.", "100 new levels.", [], false),
-              mkApp("Castle Siege", "Galaxy Demo", "Games", "shield.lefthalf.filled", [.gray, .black], 4.6, "15K", 210, "2.3.5", "Build your kingdom, train armies, and siege rival castles.", "Clan wars season 4.", ["Notifications"], false),
-              mkApp("Weather Glass", "Nova Works", "Utilities", "cloud.sun.fill", [.cyan, .blue], 4.5, "7.9K", 15, "1.2.2", "Hyperlocal forecasts with stunning liquid-glass widgets.", "Radar layer.", ["Location", "Notifications"], false),
-              mkApp("File Vault", "DDE Labs", "Utilities", "folder.fill", [.gray, .blue], 4.2, "2.1K", 12, "1.0.8", "Encrypt and organize your files with Face ID protection.", "Faster indexing.", ["Storage", "Face ID"], false),
-              mkApp("Stream Box", "PixelCraft", "Entertainment", "play.tv.fill", [.red, .black], 4.6, "52K", 74, "7.1.0", "Movies and shows in 4K with offline downloads.", "New kids mode.", ["Storage"], false),
-              mkApp("Habit Spark", "Healthify Demo", "Productivity", "flame.fill", [.orange, .yellow], 4.8, "11K", 19, "2.2.0", "Build habits that stick with tiny daily wins and streaks.", "Shared streaks.", ["Notifications"], false),
-              mkApp("Meme Maker", "Galaxy Demo", "Entertainment", "face.smiling", [.yellow, .green], 4.1, "4.4K", 33, "1.5.6", "Turn any photo into a meme in seconds with smart captions.", "New templates.", ["Photos"], false)
-          ]
-
-          let categoryList = ["Popular Apps", "Featured Apps", "Recently Added", "Productivity", "Social Media", "Entertainment", "Utilities", "Games"]
-
-          struct GlassCard<Content: View>: View {
-              @ViewBuilder var content: Content
-              var body: some View {
-                  content
-                      .padding(14)
-                      .background(.ultraThinMaterial)
-                      .cornerRadius(20)
-                      .overlay(RoundedRectangle(cornerRadius: 20).stroke(.white.opacity(0.35), lineWidth: 1))
-                      .shadow(color: .black.opacity(0.10), radius: 10, y: 4)
-              }
-          }
-
-          struct AppIcon: View {
-              let app: StoreApp
-              var size: CGFloat = 56
-              var body: some View {
-                  RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
-                      .fill(LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
-                      .frame(width: size, height: size)
-                      .overlay(Image(systemName: app.icon).font(.system(size: size * 0.42)).foregroundColor(.white))
-                      .overlay(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).stroke(.white.opacity(0.4), lineWidth: 1))
-                      .shadow(color: .black.opacity(0.18), radius: 4, y: 2)
-              }
-          }
-
-          struct Stars: View {
-              let rating: Double
-              var body: some View {
-                  HStack(spacing: 2) {
-                      ForEach(0..<5) { i in
-                          Image(systemName: Double(i) < rating.rounded(.down) ? "star.fill" : (Double(i) < rating ? "star.lefthalf.filled" : "star"))
-                              .font(.caption2)
-                              .foregroundColor(.orange)
-                      }
-                  }
-              }
-          }
-
-          struct RootView: View {
-              @EnvironmentObject var store: StoreModel
-              @State private var tab = 0
-              @State private var showSearch = false
-              var body: some View {
-                  ZStack(alignment: .bottom) {
-                      Group {
-                          switch tab {
-                          case 0: TodayView()
-                          case 1: GamesView()
-                          case 2: AppsView()
-                          default: ArcadeView()
-                          }
-                      }
-                      .frame(maxWidth: .infinity, maxHeight: .infinity)
-                      FloatingBar(tab: $tab) { showSearch = true }
-                      if let toast = store.toast {
-                          VStack {
-                              Spacer()
-                              Text(toast)
-                                  .font(.subheadline.bold())
-                                  .padding(.horizontal, 20)
-                                  .padding(.vertical, 12)
-                                  .background(.ultraThinMaterial)
-                                  .cornerRadius(24)
-                                  .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
-                                  .shadow(radius: 8)
-                                  .padding(.bottom, 96)
-                          }
-                          .transition(.move(edge: .bottom).combined(with: .opacity))
-                          .animation(.spring(response: 0.4), value: store.toast)
-                          .allowsHitTesting(false)
-                      }
-                  }
-                  .sheet(isPresented: $showSearch) { SearchView().environmentObject(store) }
-              }
-          }
-
-          struct AvatarButton: View {
-              let action: () -> Void
-              var body: some View {
-                  Button(action: action) {
-                      Circle()
-                          .fill(LinearGradient(colors: [.purple, .blue], startPoint: .topLeading, endPoint: .bottomTrailing))
-                          .frame(width: 34, height: 34)
-                          .overlay(Image(systemName: "person.fill").font(.system(size: 15)).foregroundColor(.white))
-                          .overlay(Circle().stroke(.white.opacity(0.5), lineWidth: 1))
-                  }
-                  .buttonStyle(.plain)
-              }
-          }
-
-          struct FloatingBar: View {
-              @Binding var tab: Int
-              let onSearch: () -> Void
-              @Namespace private var ns
-              let items: [(String, String)] = [("Today", "doc.text.image"), ("Games", "rocket"), ("Apps", "square.stack.3d.up"), ("Arcade", "gamecontroller")]
-              var body: some View {
-                  HStack(spacing: 10) {
-                      HStack(spacing: 2) {
-                          ForEach(0..<items.count, id: \.self) { i in
-                              Button(action: { withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { tab = i } }) {
-                                  VStack(spacing: 3) {
-                                      Image(systemName: items[i].1 + (tab == i ? ".fill" : ""))
-                                          .font(.system(size: 17, weight: .semibold))
-                                      Text(items[i].0).font(.caption2.bold())
-                                  }
-                                  .foregroundColor(tab == i ? .white : .primary.opacity(0.75))
-                                  .frame(maxWidth: .infinity)
-                                  .padding(.vertical, 9)
-                                  .background {
-                                      if tab == i {
-                                          Capsule()
-                                              .fill(LinearGradient(colors: [Color(red: 0.25, green: 0.6, blue: 1.0), Color(red: 0.05, green: 0.4, blue: 0.9)], startPoint: .top, endPoint: .bottom))
-                                              .matchedGeometryEffect(id: "sel", in: ns)
-                                              .overlay(Capsule().stroke(.white.opacity(0.5), lineWidth: 1))
-                                              .shadow(color: .blue.opacity(0.45), radius: 8, y: 2)
-                                      }
-                                  }
-                              }
-                              .buttonStyle(.plain)
-                          }
-                      }
-                      .padding(4)
-                      .background(.ultraThinMaterial)
-                      .clipShape(Capsule())
-                      .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
-                      .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-                      Button(action: onSearch) {
-                          Image(systemName: "magnifyingglass")
-                              .font(.system(size: 20, weight: .semibold))
-                              .foregroundColor(.primary.opacity(0.85))
-                              .frame(width: 54, height: 54)
-                              .background(.ultraThinMaterial)
-                              .clipShape(Circle())
-                              .overlay(Circle().stroke(.white.opacity(0.4), lineWidth: 1))
-                              .shadow(color: .black.opacity(0.15), radius: 12, y: 4)
-                      }
-                      .buttonStyle(.plain)
-                  }
-                  .padding(.horizontal, 20)
-                  .padding(.bottom, 8)
-              }
-          }
-
-          struct TodayView: View {
-              @State private var showProfile = false
-              var featured: StoreApp { catalogue.first { $0.featured } ?? catalogue[0] }
-              var appOfDay: StoreApp { catalogue.first { $0.name == "Space Runner" } ?? catalogue[1] }
-              var body: some View {
-                  NavigationStack {
-                      ScrollView {
-                          VStack(alignment: .leading, spacing: 20) {
-                              NavigationLink(destination: CollectionView(title: "New in DDE Glass", apps: catalogue.filter { $0.featured })) {
-                                  FeatureCard(eyebrow: "NOW TRENDING", title: "See what is new in DDE Glass", subtitle: "A gorgeous liquid glass design - more personal, expressive and delightful.", colors: [.teal, .blue], icon: "sparkles")
-                              }
-                              .buttonStyle(.plain)
-                              NavigationLink(destination: AppDetailView(app: appOfDay)) {
-                                  AppOfDayCard(app: appOfDay)
-                              }
-                              .buttonStyle(.plain)
-                              Text("Our Favourites").font(.title3.bold()).padding(.horizontal)
-                              VStack(spacing: 2) {
-                                  ForEach(catalogue.prefix(4)) { app in
-                                      FavouriteRow(app: app)
-                                  }
-                              }
-                              NavigationLink(destination: CollectionView(title: "Explore the Collection", apps: catalogue)) {
-                                  HStack {
-                                      Text("Explore the full collection").font(.subheadline.bold())
-                                      Spacer()
-                                      Image(systemName: "chevron.right").font(.caption.bold()).foregroundColor(.secondary)
-                                  }
-                                  .padding(14)
-                                  .background(.ultraThinMaterial)
-                                  .cornerRadius(16)
-                                  .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.3), lineWidth: 1))
-                                  .padding(.horizontal)
-                              }
-                              .buttonStyle(.plain)
-                              NavigationLink(destination: AppDetailView(app: featured)) {
-                                  FeatureCard(eyebrow: "EDITOR'S CHOICE", title: featured.name, subtitle: featured.desc, colors: featured.colors, icon: featured.icon)
-                              }
-                              .buttonStyle(.plain)
-                              Spacer().frame(height: 90)
-                          }
-                          .padding(.top, 8)
-                      }
-                      .navigationTitle("Today")
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              AvatarButton { showProfile = true }
-                          }
-                      }
-                      .sheet(isPresented: $showProfile) { ProfileView() }
-                  }
-              }
-          }
-
-          struct FeatureCard: View {
-              @State private var shine = false
-              let eyebrow: String
-              let title: String
-              let subtitle: String
-              let colors: [Color]
-              let icon: String
-              var body: some View {
-                  ZStack(alignment: .bottomLeading) {
-                      LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                      Image(systemName: icon)
-                          .font(.system(size: 130))
-                          .foregroundColor(.white.opacity(0.25))
-                          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                          .padding(24)
-                      LinearGradient(colors: [.white.opacity(0), .white.opacity(0.28), .white.opacity(0)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                          .frame(width: 500)
-                          .rotationEffect(.degrees(18))
-                          .offset(x: shine ? 420 : -420)
-                          .allowsHitTesting(false)
-                      VStack(alignment: .leading, spacing: 6) {
-                          Spacer()
-                          Text(eyebrow).font(.caption.bold()).foregroundColor(.white.opacity(0.85))
-                          Text(title).font(.title2.bold()).foregroundColor(.white)
-                          Text(subtitle).font(.subheadline).foregroundColor(.white.opacity(0.9)).lineLimit(2)
-                      }
-                      .padding(18)
-                  }
-                  .frame(height: 330)
-                  .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                  .overlay(RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.35), lineWidth: 1))
-                  .shadow(color: colors.first?.opacity(0.4) ?? .clear, radius: 14, y: 8)
-                  .padding(.horizontal)
-                  .onAppear {
-                      withAnimation(.easeInOut(duration: 3.4).repeatForever(autoreverses: false)) { shine = true }
-                  }
-              }
-          }
-
-          struct AppOfDayCard: View {
-              let app: StoreApp
-              var body: some View {
-                  VStack(spacing: 0) {
-                      ZStack(alignment: .bottomLeading) {
-                          LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                          Image(systemName: app.icon)
-                              .font(.system(size: 90))
-                              .foregroundColor(.white.opacity(0.3))
-                              .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                          VStack(alignment: .leading, spacing: 4) {
-                              Text("APP OF THE DAY").font(.caption.bold()).foregroundColor(.white.opacity(0.85))
-                              Text(app.name).font(.title2.bold()).foregroundColor(.white)
-                          }
-                          .padding(16)
-                      }
-                      .frame(height: 210)
-                      HStack(spacing: 10) {
-                          AppIcon(app: app, size: 40)
-                          VStack(alignment: .leading, spacing: 1) {
-                              Text(app.name).font(.subheadline.bold())
-                              Text(app.desc).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                          }
-                          Spacer()
-                          GetButton(app: app)
-                      }
-                      .padding(12)
-                      .background(.ultraThinMaterial)
-                  }
-                  .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                  .overlay(RoundedRectangle(cornerRadius: 24).stroke(.white.opacity(0.35), lineWidth: 1))
-                  .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
-                  .padding(.horizontal)
-              }
-          }
-
-          struct InstallPill: View {
-              @EnvironmentObject var store: StoreModel
-              let app: StoreApp
-              var label: String = "Install"
-              var body: some View {
-                  let item = store.item(for: app)
-                  Button(action: {
-                      guard let item = item else { store.start(app); return }
-                      switch item.state {
-                      case .downloading: store.pause(item.id)
-                      case .paused: store.resume(item.id)
-                      case .installed: store.showToast("Demo mode - apps cannot really run inside the sandbox")
-                      default: break
-                      }
-                  }) {
-                      Group {
-                          if let item = item {
-                              switch item.state {
-                              case .downloading:
-                                  ProgressView(value: item.progress).progressViewStyle(.circular).tint(Color(red: 0.1, green: 0.45, blue: 0.95)).frame(width: 22, height: 22)
-                              case .paused:
-                                  Image(systemName: "play.fill").font(.caption.bold())
-                              case .installing:
-                                  ProgressView().progressViewStyle(.circular).tint(Color(red: 0.1, green: 0.45, blue: 0.95)).frame(width: 22, height: 22)
-                              case .installed:
-                                  Text("Open").font(.subheadline.bold())
-                              default:
-                                  Text(label).font(.subheadline.bold())
-                              }
-                          } else {
-                              Text(label).font(.subheadline.bold())
-                          }
-                      }
-                      .foregroundColor(Color(red: 0.1, green: 0.45, blue: 0.95))
-                      .frame(minWidth: 60)
-                      .padding(.horizontal, 12)
-                      .padding(.vertical, 7)
-                      .background(Color(red: 0.1, green: 0.45, blue: 0.95).opacity(0.12))
-                      .clipShape(Capsule())
-                  }
-                  .buttonStyle(.plain)
-              }
-          }
-
-          struct FavouriteRow: View {
-              let app: StoreApp
-              var body: some View {
-                  NavigationLink(destination: AppDetailView(app: app)) {
-                      HStack(spacing: 12) {
-                          AppIcon(app: app, size: 48)
-                          VStack(alignment: .leading, spacing: 2) {
-                              Text(app.name).font(.headline).lineLimit(1)
-                              Text(app.developer).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                          }
-                          Spacer()
-                          InstallPill(app: app, label: "Get")
-                      }
-                      .padding(.vertical, 6)
-                      .padding(.horizontal)
-                  }
-                  .buttonStyle(.plain)
-              }
-          }
-
-          struct AppListRow: View {
-              let app: StoreApp
-              var actionLabel: String = "Install"
-              var buildNumber: Int { (app.name.count * 137 + app.version.count * 91) % 900 + 100 }
-              var expiryDays: Int { 55 + (app.name.count * 3) % 35 }
-              var body: some View {
-                  NavigationLink(destination: AppDetailView(app: app)) {
-                      HStack(spacing: 12) {
-                          AppIcon(app: app, size: 48)
-                          VStack(alignment: .leading, spacing: 2) {
-                              Text(app.name).font(.headline).lineLimit(1)
-                              Text("Version \(app.version) (\(buildNumber))").font(.caption).foregroundColor(.secondary)
-                              Text("Demo slot - expires in \(expiryDays) days").font(.caption).foregroundColor(.secondary)
-                          }
-                          Spacer()
-                          InstallPill(app: app, label: actionLabel)
-                      }
-                      .padding(.vertical, 6)
-                  }
-                  .buttonStyle(.plain)
-              }
-          }
-
           struct AppsView: View {
-              @State private var showProfile = false
-              var updatable: [StoreApp] { Array(catalogue.prefix(2)) }
-              var rest: [StoreApp] { Array(catalogue.dropFirst(2)) }
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section(header: Text("Updates Available")) {
-                              ForEach(updatable) { app in
-                                  AppListRow(app: app, actionLabel: "Update")
-                              }
-                          }
-                          Section(header: Text("Recently Added")) {
-                              ForEach(rest) { app in
-                                  AppListRow(app: app, actionLabel: "Install")
-                              }
-                          }
-                          Section { Spacer().frame(height: 80).listRowBackground(Color.clear) }
-                      }
-                      .listStyle(.plain)
-                      .navigationTitle("Apps")
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              AvatarButton { showProfile = true }
-                          }
-                      }
-                      .sheet(isPresented: $showProfile) { ProfileView() }
-                  }
-              }
-          }
+              @EnvironmentObject private var store: StoreViewModel
+              @State private var selectedApp: StoreApp?
 
-          struct GamesView: View {
-              @State private var showProfile = false
-              var games: [StoreApp] { catalogue.filter { $0.category == "Games" } }
               var body: some View {
                   NavigationStack {
                       ScrollView {
-                          VStack(alignment: .leading, spacing: 20) {
-                              if let first = games.first {
-                                  NavigationLink(destination: AppDetailView(app: first)) {
-                                      FeatureCard(eyebrow: "GAME OF THE DAY", title: first.name, subtitle: first.desc, colors: first.colors, icon: first.icon)
-                                  }
-                                  .buttonStyle(.plain)
+                          VStack(alignment: .leading, spacing: 18) {
+                              Text("Apps").font(.largeTitle.bold())
+                              categoryPicker
+                              ForEach(store.filteredApps) { app in
+                                  AppRow(app: app) { selectedApp = app }
                               }
-                              Text("Top Games").font(.title3.bold()).padding(.horizontal)
-                              VStack(spacing: 2) {
-                                  ForEach(games) { app in
-                                      FavouriteRow(app: app)
-                                  }
-                              }
-                              Spacer().frame(height: 90)
-                          }
-                          .padding(.top, 8)
+                          }.padding(20)
                       }
-                      .navigationTitle("Games")
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              AvatarButton { showProfile = true }
-                          }
-                      }
-                      .sheet(isPresented: $showProfile) { ProfileView() }
+                      .sheet(item: $selectedApp) { AppDetailView(app: $0) }
                   }
               }
-          }
 
-          struct ArcadeView: View {
-              @State private var showProfile = false
-              var picks: [StoreApp] { catalogue.filter { $0.category == "Entertainment" || $0.category == "Photo & Video" } }
-              var body: some View {
-                  NavigationStack {
-                      ScrollView {
-                          VStack(alignment: .leading, spacing: 20) {
-                              if let first = picks.first {
-                                  NavigationLink(destination: AppDetailView(app: first)) {
-                                      FeatureCard(eyebrow: "ARCADE ORIGINAL", title: first.name, subtitle: first.desc, colors: first.colors, icon: first.icon)
-                                  }
-                                  .buttonStyle(.plain)
-                              }
-                              Text("Arcade Picks").font(.title3.bold()).padding(.horizontal)
-                              VStack(spacing: 2) {
-                                  ForEach(picks) { app in
-                                      FavouriteRow(app: app)
-                                  }
-                              }
-                              Spacer().frame(height: 90)
-                          }
-                          .padding(.top, 8)
-                      }
-                      .navigationTitle("Arcade")
-                      .toolbar {
-                          ToolbarItem(placement: .navigationBarTrailing) {
-                              AvatarButton { showProfile = true }
+              private var categoryPicker: some View {
+                  ScrollView(.horizontal, showsIndicators: false) {
+                      HStack {
+                          ForEach(store.categories, id: \.self) { category in
+                              Button {
+                                  store.selectedCategory = category
+                              } label: {
+                                  Text(category).font(.subheadline.weight(.semibold))
+                                      .padding(.horizontal, 14).padding(.vertical, 9)
+                                      .background(store.selectedCategory == category ? Color.primary.opacity(0.13) : Color.clear,
+                                                  in: Capsule())
+                                      .overlay(Capsule().strokeBorder(.primary.opacity(0.1)))
+                              }.buttonStyle(.plain)
                           }
                       }
-                      .sheet(isPresented: $showProfile) { ProfileView() }
                   }
-              }
-          }
-
-          struct CollectionView: View {
-              let title: String
-              let apps: [StoreApp]
-              var body: some View {
-                  List {
-                      ForEach(apps) { app in
-                          AppListRow(app: app, actionLabel: "Install")
-                      }
-                  }
-                  .listStyle(.plain)
-                  .navigationTitle(title)
-                  .navigationBarTitleDisplayMode(.large)
-              }
-          }
-
-          struct AppRow: View {
-              let app: StoreApp
-              var body: some View {
-                  HStack(spacing: 12) {
-                      AppIcon(app: app)
-                      VStack(alignment: .leading, spacing: 3) {
-                          Text(app.name).font(.headline)
-                          Text("\(app.developer) - \(app.category)").font(.caption).foregroundColor(.secondary)
-                          HStack(spacing: 4) {
-                              Stars(rating: app.rating)
-                              Text(app.reviews).font(.caption2).foregroundColor(.secondary)
-                          }
-                      }
-                      Spacer()
-                      GetButton(app: app)
-                  }
-                  .padding(.vertical, 4)
-              }
-          }
-
-          struct GetButton: View {
-              @EnvironmentObject var store: StoreModel
-              let app: StoreApp
-              var light: Bool = false
-              var body: some View {
-                  let item = store.item(for: app)
-                  Button(action: {
-                      if let item = item, item.state == .installed {
-                          store.showToast("Demo mode - apps cannot really run inside the sandbox")
-                      } else {
-                          store.start(app)
-                      }
-                  }) {
-                      Group {
-                          if let item = item {
-                              switch item.state {
-                              case .downloading:
-                                  ProgressView(value: item.progress).progressViewStyle(.circular)
-                              case .paused:
-                                  Image(systemName: "play.fill").font(.caption.bold())
-                              case .installing:
-                                  ProgressView().progressViewStyle(.circular)
-                              case .installed:
-                                  Text("OPEN").font(.caption.bold())
-                              default:
-                                  Text("GET").font(.caption.bold())
-                              }
-                          } else {
-                              Text("GET").font(.caption.bold())
-                          }
-                      }
-                      .foregroundColor(light ? .white : .accentColor)
-                      .frame(width: 72, height: 30)
-                      .background(light ? AnyShapeStyle(.white.opacity(0.25)) : AnyShapeStyle(.ultraThinMaterial))
-                      .cornerRadius(15)
-                      .overlay(RoundedRectangle(cornerRadius: 15).stroke(.white.opacity(light ? 0.7 : 0.4), lineWidth: 1))
-                  }
-                  .buttonStyle(.plain)
               }
           }
 
           struct SearchView: View {
-              @AppStorage("dde_recent") private var recentRaw: String = ""
-              @State private var query = ""
-              @State private var filterCat = "All"
-
-              let filterCats = ["All", "Productivity", "Social Media", "Entertainment", "Utilities", "Games", "Photo & Video"]
-
-              var recent: [String] { recentRaw.isEmpty ? [] : recentRaw.components(separatedBy: "|") }
-
-              var results: [StoreApp] {
-                  let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-                  guard !q.isEmpty else { return [] }
-                  return catalogue.filter {
-                      (filterCat == "All" || $0.category == filterCat) &&
-                      ($0.name.lowercased().contains(q) ||
-                       $0.category.lowercased().contains(q) ||
-                       $0.developer.lowercased().contains(q))
-                  }
-              }
-
-              func addRecent(_ term: String) {
-                  var list = recent.filter { $0 != term }
-                  list.insert(term, at: 0)
-                  recentRaw = Array(list.prefix(8)).joined(separator: "|")
-              }
+              @EnvironmentObject private var store: StoreViewModel
+              @State private var selectedApp: StoreApp?
 
               var body: some View {
                   NavigationStack {
-                      VStack(spacing: 0) {
-                          HStack(spacing: 10) {
-                              Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-                              TextField("Apps, games, developers", text: $query, onCommit: {
-                                  if !query.isEmpty { addRecent(query) }
-                              })
-                              .autocapitalization(.none)
-                              .disableAutocorrection(true)
-                              if !query.isEmpty {
-                                  Button(action: { query = "" }) {
-                                      Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-                                  }
-                              }
-                          }
-                          .padding(12)
-                          .background(.ultraThinMaterial)
-                          .cornerRadius(16)
-                          .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 1))
-                          .padding(.horizontal)
-                          .padding(.top)
-
-                          ScrollView(.horizontal, showsIndicators: false) {
-                              HStack(spacing: 8) {
-                                  ForEach(filterCats, id: \.self) { cat in
-                                      Button(action: { filterCat = cat }) {
-                                          Text(cat)
-                                              .font(.caption.bold())
-                                              .padding(.horizontal, 12)
-                                              .padding(.vertical, 7)
-                                              .background(filterCat == cat ? Color.accentColor.opacity(0.18) : Color.clear)
-                                              .background(.ultraThinMaterial)
-                                              .cornerRadius(14)
-                                              .overlay(Capsule().stroke(filterCat == cat ? Color.accentColor : .white.opacity(0.35), lineWidth: 1))
-                                      }
-                                      .buttonStyle(.plain)
-                                  }
-                              }
-                              .padding(.horizontal)
-                          }
-                          .padding(.bottom, 8)
-
-                          if query.isEmpty {
-                              List {
-                                  if !recent.isEmpty {
-                                      Section(header: HStack {
-                                          Text("Recent Searches")
-                                          Spacer()
-                                          Button("Clear") { recentRaw = "" }.font(.caption)
-                                      }.textCase(nil)) {
-                                          ForEach(recent, id: \.self) { term in
-                                              Button(action: { query = term }) {
-                                                  HStack {
-                                                      Image(systemName: "clock").foregroundColor(.secondary)
-                                                      Text(term).foregroundColor(.primary)
-                                                  }
-                                              }
-                                          }
-                                      }
-                                  }
-                                  Section(header: Text("Trending").textCase(nil)) {
-                                      ForEach(["photo editor", "games", "music", "notes", "fitness"], id: \.self) { term in
-                                          Button(action: { query = term; addRecent(term) }) {
-                                              HStack {
-                                                  Image(systemName: "arrow.up.right").foregroundColor(.secondary)
-                                                  Text(term).foregroundColor(.primary)
-                                              }
-                                          }
+                      ScrollView {
+                          VStack(alignment: .leading, spacing: 18) {
+                              Text("Search").font(.largeTitle.bold())
+                              HStack {
+                                  Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                                  TextField("Apps, games and more", text: $store.searchText)
+                                      .autocorrectionDisabled()
+                                  if !store.searchText.isEmpty {
+                                      Button { store.searchText = "" } label: {
+                                          Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                                       }
                                   }
                               }
-                              .listStyle(.plain)
-                          } else if results.isEmpty {
-                              VStack(spacing: 12) {
-                                  Spacer()
-                                  Image(systemName: "questionmark.app.dashed").font(.system(size: 52)).foregroundColor(.secondary)
-                                  Text("No results for \"\(query)\"").font(.headline)
-                                  Text("Try a different name or category.").font(.subheadline).foregroundColor(.secondary)
-                                  Spacer()
+                              .padding(14).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                              ForEach(store.filteredApps) { app in
+                                  AppRow(app: app) { selectedApp = app }
                               }
-                              .frame(maxWidth: .infinity)
-                          } else {
-                              List(results) { app in
-                                  NavigationLink(destination: AppDetailView(app: app)) {
-                                      AppRow(app: app)
-                                  }
+                              if store.filteredApps.isEmpty {
+                                  ContentUnavailableView.search(text: store.searchText)
                               }
-                              .listStyle(.plain)
-                          }
-                          Spacer().frame(height: 80)
+                          }.padding(20)
                       }
-                      .navigationTitle("Search")
+                      .sheet(item: $selectedApp) { AppDetailView(app: $0) }
                   }
               }
           }
+          EOF_DDEGLASSSTORE_APPSANDSEARCHVIEWS_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/GlassStyle.swift')
+          cat > 'DDEGlassStore/GlassStyle.swift' <<'EOF_DDEGLASSSTORE_GLASSSTYLE_SWIFT'
+          import SwiftUI
 
-          struct DownloadsView: View {
-              @EnvironmentObject var store: StoreModel
-              var active: [DownloadItem] { store.downloads.filter { [.downloading, .paused, .installing].contains($0.state) } }
-              var history: [DownloadItem] { store.downloads.filter { [.installed, .canceled, .failed].contains($0.state) } }
+          struct GlassPanel<Content: View>: View {
+              var padding: CGFloat = 16
+              @ViewBuilder var content: Content
+
+              var body: some View {
+                  content
+                      .padding(padding)
+                      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                      .overlay {
+                          RoundedRectangle(cornerRadius: 24, style: .continuous)
+                              .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                      }
+              }
+          }
+
+          struct AppIconView: View {
+              let app: StoreApp
+              var size: CGFloat = 58
+
+              var body: some View {
+                  RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
+                      .fill(LinearGradient(colors: [app.tint.opacity(0.95), app.tint.opacity(0.55)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing))
+                      .overlay {
+                          Image(systemName: app.symbol)
+                              .font(.system(size: size * 0.42, weight: .semibold))
+                              .foregroundStyle(.white)
+                      }
+                      .frame(width: size, height: size)
+                      .shadow(color: app.tint.opacity(0.22), radius: 12, y: 6)
+              }
+          }
+
+          struct SectionHeading: View {
+              let title: String
+              var trailing: String? = nil
+
+              var body: some View {
+                  HStack {
+                      Text(title).font(.title2.bold())
+                      Spacer()
+                      if let trailing {
+                          Text(trailing).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                      }
+                  }
+              }
+          }
+          EOF_DDEGLASSSTORE_GLASSSTYLE_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/App.swift')
+          cat > 'DDEGlassStore/App.swift' <<'EOF_DDEGLASSSTORE_APP_SWIFT'
+          import SwiftUI
+
+          @main
+          struct DDEGlassStoreApp: App {
+              @StateObject private var store = StoreViewModel()
+
+              var body: some Scene {
+                  WindowGroup {
+                      RootView()
+                          .environmentObject(store)
+                          .preferredColorScheme(store.colorScheme)
+                  }
+              }
+          }
+          EOF_DDEGLASSSTORE_APP_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/Models.swift')
+          cat > 'DDEGlassStore/Models.swift' <<'EOF_DDEGLASSSTORE_MODELS_SWIFT'
+          import SwiftUI
+
+          struct StoreApp: Identifiable, Hashable {
+              let id: String
+              let name: String
+              let developer: String
+              let subtitle: String
+              let description: String
+              let category: String
+              let version: String
+              let size: String
+              let symbol: String
+              let tint: Color
+              var isFeatured: Bool = false
+          }
+
+          enum DownloadState: Equatable {
+              case notStarted, downloading, complete
+          }
+
+          struct DownloadItem: Identifiable {
+              let id: String
+              let appName: String
+              var progress: Double
+              var state: DownloadState
+          }
+          EOF_DDEGLASSSTORE_MODELS_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/DiscoverView.swift')
+          cat > 'DDEGlassStore/DiscoverView.swift' <<'EOF_DDEGLASSSTORE_DISCOVERVIEW_SWIFT'
+          import SwiftUI
+
+          struct DiscoverView: View {
+              @EnvironmentObject private var store: StoreViewModel
+              @State private var selectedApp: StoreApp?
+
               var body: some View {
                   NavigationStack {
-                      Group {
-                          if store.downloads.isEmpty {
-                              VStack(spacing: 12) {
-                                  Spacer()
-                                  Image(systemName: "arrow.down.circle").font(.system(size: 52)).foregroundColor(.secondary)
-                                  Text("No downloads yet").font(.headline)
-                                  Text("Tap GET on any app and it will show up here.").font(.subheadline).foregroundColor(.secondary).multilineTextAlignment(.center).padding(.horizontal, 40)
-                                  Spacer()
+                      ScrollView(showsIndicators: false) {
+                          VStack(alignment: .leading, spacing: 26) {
+                              header
+                              if let featured = store.apps.first(where: \.isFeatured) {
+                                  featuredCard(featured)
                               }
-                              .frame(maxWidth: .infinity)
-                          } else {
-                              List {
-                                  if !active.isEmpty {
-                                      Section(header: Text("Active").textCase(nil)) {
-                                          ForEach(active) { item in DownloadRow(item: item) }
-                                      }
-                                  }
-                                  if !history.isEmpty {
-                                      Section(header: HStack {
-                                          Text("History")
-                                          Spacer()
-                                          Button("Clear") { store.clearHistory() }.font(.caption)
-                                      }.textCase(nil)) {
-                                          ForEach(history) { item in DownloadRow(item: item) }
-                                      }
+                              VStack(alignment: .leading, spacing: 14) {
+                                  SectionHeading(title: "Popular right now", trailing: "See all")
+                                  ForEach(store.apps.filter { !$0.isFeatured }) { app in
+                                      AppRow(app: app) { selectedApp = app }
                                   }
                               }
-                              .listStyle(.plain)
+                              VStack(alignment: .leading, spacing: 14) {
+                                  SectionHeading(title: "Explore categories")
+                                  ScrollView(.horizontal, showsIndicators: false) {
+                                      HStack {
+                                          ForEach(store.categories.filter { $0 != "All" }, id: \.self) { category in
+                                              Button {
+                                                  store.selectedCategory = category
+                                                  store.selectedTab = 1
+                                              } label: {
+                                                  Text(category).font(.subheadline.weight(.semibold))
+                                                      .padding(.horizontal, 16).padding(.vertical, 11)
+                                                      .background(.ultraThinMaterial, in: Capsule())
+                                              }.buttonStyle(.plain)
+                                          }
+                                      }
+                                  }
+                              }
                           }
+                          .padding(.horizontal, 20)
+                          .padding(.top, 16)
+                          .padding(.bottom, 24)
                       }
-                      .navigationTitle("Downloads")
+                      .toolbar(.hidden, for: .navigationBar)
+                      .sheet(item: $selectedApp) { AppDetailView(app: $0) }
                   }
               }
-          }
 
-          struct DownloadRow: View {
-              @EnvironmentObject var store: StoreModel
-              let item: DownloadItem
-              var body: some View {
-                  HStack(spacing: 12) {
-                      AppIcon(app: item.app, size: 48)
+              private var header: some View {
+                  HStack(alignment: .center) {
                       VStack(alignment: .leading, spacing: 4) {
-                          Text(item.app.name).font(.headline)
-                          if item.state == .downloading || item.state == .installing {
-                              ProgressView(value: item.progress)
-                              Text(item.state == .downloading
-                                   ? "\(Int(item.progress * 100))% of \(item.app.sizeMB) MB - \(String(format: "%.1f", item.speed)) MB/s"
-                                   : "Installing...").font(.caption).foregroundColor(.secondary)
-                          } else {
-                              Text(item.state.rawValue + (item.state == .installed ? " (demo)" : ""))
-                                  .font(.caption)
-                                  .foregroundColor(item.state == .installed ? .green : .secondary)
-                          }
+                          Text("FRIDAY, NOVEMBER 6").font(.caption2.weight(.bold)).tracking(1.3).foregroundStyle(.secondary)
+                          Text("Discover").font(.largeTitle.bold())
                       }
                       Spacer()
-                      HStack(spacing: 14) {
-                          switch item.state {
-                          case .downloading:
-                              Button(action: { store.pause(item.id) }) { Image(systemName: "pause.fill") }
-                              Button(action: { store.cancel(item.id) }) { Image(systemName: "xmark") }
-                          case .paused:
-                              Button(action: { store.resume(item.id) }) { Image(systemName: "play.fill") }
-                              Button(action: { store.cancel(item.id) }) { Image(systemName: "xmark") }
-                          case .failed:
-                              Button(action: { store.retry(item.id) }) { Image(systemName: "arrow.clockwise") }
-                          case .installed:
-                              Button(action: { store.showToast("Demo mode - apps cannot really run inside the sandbox") }) { Text("OPEN").font(.caption.bold()) }
-                          default:
-                              EmptyView()
-                          }
-                      }
-                      .foregroundColor(.accentColor)
+                      Image(systemName: "person.crop.circle.fill")
+                          .font(.system(size: 34)).foregroundStyle(.secondary)
                   }
-                  .padding(.vertical, 4)
+              }
+
+              private func featuredCard(_ app: StoreApp) -> some View {
+                  Button { selectedApp = app } label: {
+                      ZStack(alignment: .bottomLeading) {
+                          RoundedRectangle(cornerRadius: 30).fill(
+                              LinearGradient(colors: [.indigo, .purple, .blue.opacity(0.8)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                          Circle().fill(.white.opacity(0.12)).frame(width: 190).offset(x: 210, y: -55)
+                          VStack(alignment: .leading, spacing: 12) {
+                              Text("EDITOR'S FEATURE").font(.caption2.bold()).tracking(1.5).foregroundStyle(.white.opacity(0.8))
+                              AppIconView(app: app, size: 66)
+                              Text(app.name).font(.title.bold()).foregroundStyle(.white)
+                              Text(app.subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                              Text("EXPLORE  →").font(.caption.bold()).tracking(1).foregroundStyle(.white)
+                          }.padding(22)
+                      }
+                      .frame(height: 260).clipShape(RoundedRectangle(cornerRadius: 30))
+                  }.buttonStyle(.plain)
               }
           }
 
-          struct InfoChip: View {
-              let value: String
-              let label: String
+          struct AppRow: View {
+              @EnvironmentObject private var store: StoreViewModel
+              let app: StoreApp
+              var action: () -> Void
+
               var body: some View {
-                  VStack(spacing: 2) {
-                      Text(value).font(.subheadline.bold())
-                      Text(label).font(.caption2).foregroundColor(.secondary)
+                  HStack(spacing: 13) {
+                      AppIconView(app: app)
+                      VStack(alignment: .leading, spacing: 4) {
+                          Text(app.name).font(.headline)
+                          Text(app.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                          Text(app.category.uppercased()).font(.system(size: 9, weight: .bold)).tracking(0.8).foregroundStyle(.tertiary)
+                      }
+                      Spacer()
+                      Button("GET") { store.startDemoDownload(for: app) }
+                          .font(.caption.bold()).foregroundStyle(.blue)
+                          .padding(.horizontal, 17).padding(.vertical, 8)
+                          .background(.quaternary, in: Capsule())
+                      Button(action: action) {
+                          Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+                      }
                   }
-                  .frame(maxWidth: .infinity)
-                  .padding(.vertical, 10)
-                  .background(.ultraThinMaterial)
-                  .cornerRadius(14)
-                  .overlay(RoundedRectangle(cornerRadius: 14).stroke(.white.opacity(0.3), lineWidth: 1))
+                  .padding(12)
+                  .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
               }
           }
+          EOF_DDEGLASSSTORE_DISCOVERVIEW_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/DownloadsView.swift')
+          cat > 'DDEGlassStore/DownloadsView.swift' <<'EOF_DDEGLASSSTORE_DOWNLOADSVIEW_SWIFT'
+          import SwiftUI
+
+          struct DownloadsView: View {
+              @EnvironmentObject private var store: StoreViewModel
+
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          VStack(alignment: .leading, spacing: 18) {
+                              Text("Downloads").font(.largeTitle.bold())
+                              GlassPanel {
+                                  Label("Demo download manager", systemImage: "arrow.down.circle")
+                                      .font(.headline)
+                                  Text("Progress shown here is a UI demonstration. No third-party app files are downloaded or installed.")
+                                      .font(.caption).foregroundStyle(.secondary)
+                              }
+                              if store.downloads.isEmpty {
+                                  ContentUnavailableView("No Downloads", systemImage: "arrow.down.circle",
+                                                         description: Text("Apps you add from the catalogue will appear here."))
+                              } else {
+                                  ForEach(store.downloads) { item in
+                                      VStack(alignment: .leading, spacing: 10) {
+                                          HStack {
+                                              Text(item.appName).font(.headline)
+                                              Spacer()
+                                              Text(item.state == .complete ? "Done" : "\(Int(item.progress * 100))%")
+                                                  .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                          }
+                                          ProgressView(value: item.progress)
+                                      }.padding(15).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                                  }
+                              }
+                          }.padding(20)
+                      }
+                  }
+              }
+          }
+          EOF_DDEGLASSSTORE_DOWNLOADSVIEW_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/RootView.swift')
+          cat > 'DDEGlassStore/RootView.swift' <<'EOF_DDEGLASSSTORE_ROOTVIEW_SWIFT'
+          import SwiftUI
+
+          struct RootView: View {
+              @EnvironmentObject private var store: StoreViewModel
+
+              var body: some View {
+                  ZStack(alignment: .bottom) {
+                      LinearGradient(colors: [Color(uiColor: .systemBackground),
+                                              Color.indigo.opacity(0.08),
+                                              Color(uiColor: .systemBackground)],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing)
+                          .ignoresSafeArea()
+
+                      Group {
+                          switch store.selectedTab {
+                          case 1: AppsView()
+                          case 2: SearchView()
+                          case 3: DownloadsView()
+                          default: DiscoverView()
+                          }
+                      }
+                      .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 82) }
+
+                      tabBar
+                  }
+                  .tint(.primary)
+              }
+
+              private var tabBar: some View {
+                  HStack(spacing: 0) {
+                      tab("Discover", icon: "sparkles", index: 0)
+                      tab("Apps", icon: "square.grid.2x2", index: 1)
+                      tab("Search", icon: "magnifyingglass", index: 2)
+                      tab("Downloads", icon: "arrow.down.circle", index: 3)
+                  }
+                  .padding(.vertical, 12)
+                  .background(.ultraThinMaterial, in: Capsule())
+                  .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                  .shadow(color: .black.opacity(0.16), radius: 22, y: 8)
+                  .padding(.horizontal, 22)
+                  .padding(.bottom, 8)
+              }
+
+              private func tab(_ title: String, icon: String, index: Int) -> some View {
+                  Button {
+                      withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                          store.selectedTab = index
+                      }
+                  } label: {
+                      VStack(spacing: 5) {
+                          Image(systemName: icon).font(.system(size: 19, weight: .semibold))
+                          Text(title).font(.system(size: 10, weight: .semibold))
+                      }
+                      .foregroundStyle(store.selectedTab == index ? Color.primary : Color.secondary)
+                      .frame(maxWidth: .infinity)
+                      .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+          EOF_DDEGLASSSTORE_ROOTVIEW_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/AppDetailView.swift')
+          cat > 'DDEGlassStore/AppDetailView.swift' <<'EOF_DDEGLASSSTORE_APPDETAILVIEW_SWIFT'
+          import SwiftUI
 
           struct AppDetailView: View {
-              @EnvironmentObject var store: StoreModel
+              @EnvironmentObject private var store: StoreViewModel
+              @Environment(\.dismiss) private var dismiss
               let app: StoreApp
+
               var body: some View {
-                  ScrollView {
-                      VStack(alignment: .leading, spacing: 20) {
-                          HStack(spacing: 16) {
-                              AppIcon(app: app, size: 92)
-                              VStack(alignment: .leading, spacing: 6) {
-                                  Text(app.name).font(.title2.bold())
-                                  Text(app.developer).font(.subheadline).foregroundColor(.accentColor)
-                                  GetButton(app: app)
-                              }
-                              Spacer()
-                          }
-                          .padding(.horizontal)
-
-                          HStack(spacing: 10) {
-                              InfoChip(value: String(format: "%.1f", app.rating), label: "Rating")
-                              InfoChip(value: app.reviews, label: "Reviews")
-                              InfoChip(value: "\(app.sizeMB) MB", label: "Size")
-                              InfoChip(value: "v\(app.version)", label: "Version")
-                          }
-                          .padding(.horizontal)
-
-                          VStack(alignment: .leading, spacing: 10) {
-                              Text("Preview").font(.title3.bold())
-                              ScrollView(.horizontal, showsIndicators: false) {
-                                  HStack(spacing: 12) {
-                                      ForEach(0..<3, id: \.self) { i in
-                                          ZStack {
-                                              LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-                                              Image(systemName: app.icon).font(.system(size: 44)).foregroundColor(.white.opacity(0.8))
-                                          }
-                                          .frame(width: 170, height: 300)
-                                          .cornerRadius(18)
-                                          .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.35), lineWidth: 1))
-                                      }
-                                  }
-                                  .padding(.horizontal)
-                              }
-                          }
-                          .padding(.horizontal, 0)
-                          .padding(.leading)
-
-                          VStack(alignment: .leading, spacing: 8) {
-                              Text("About").font(.title3.bold())
-                              Text(app.desc).font(.subheadline).foregroundColor(.secondary)
-                          }
-                          .padding(.horizontal)
-
-                          VStack(alignment: .leading, spacing: 8) {
-                              Text("What's New").font(.title3.bold())
-                              Text("Version \(app.version)").font(.caption).foregroundColor(.secondary)
-                              Text(app.whatsNew).font(.subheadline).foregroundColor(.secondary)
-                          }
-                          .padding(.horizontal)
-
-                          VStack(alignment: .leading, spacing: 8) {
-                              Text("Ratings & Reviews").font(.title3.bold())
+                  NavigationStack {
+                      ScrollView {
+                          VStack(alignment: .leading, spacing: 22) {
                               HStack(spacing: 16) {
-                                  Text(String(format: "%.1f", app.rating)).font(.system(size: 48, weight: .bold))
-                                  VStack(alignment: .leading) {
-                                      Stars(rating: app.rating)
-                                      Text("\(app.reviews) ratings").font(.caption).foregroundColor(.secondary)
+                                  AppIconView(app: app, size: 88)
+                                  VStack(alignment: .leading, spacing: 6) {
+                                      Text(app.name).font(.title2.bold())
+                                      Text(app.developer).font(.subheadline).foregroundStyle(.secondary)
+                                      Text(app.subtitle).font(.caption).foregroundStyle(.secondary)
                                   }
                               }
-                          }
-                          .padding(.horizontal)
-
-                          VStack(alignment: .leading, spacing: 8) {
-                              Text("Permissions").font(.title3.bold())
-                              if app.permissions.isEmpty {
-                                  Text("No special permissions required.").font(.subheadline).foregroundColor(.secondary)
-                              } else {
-                                  ForEach(app.permissions, id: \.self) { p in
-                                      HStack(spacing: 10) {
-                                          Image(systemName: "checkmark.shield.fill").foregroundColor(.green)
-                                          Text(p).font(.subheadline)
-                                      }
-                                  }
-                              }
-                          }
-                          .padding(.horizontal)
-
-                          Spacer().frame(height: 100)
-                      }
-                      .padding(.top, 8)
-                  }
-                  .navigationBarTitleDisplayMode(.inline)
-                  .onAppear { store.recordView(app) }
-                  .toolbar {
-                      ToolbarItem(placement: .navigationBarTrailing) {
-                          HStack(spacing: 16) {
-                              Button(action: { store.toggleSave(app) }) {
-                                  Image(systemName: store.isSaved(app) ? "heart.fill" : "heart")
-                                      .foregroundColor(store.isSaved(app) ? .red : .accentColor)
-                              }
-                              ShareLink(item: "Check out \(app.name) on DDE Glass Store (demo)!") {
-                                  Image(systemName: "square.and.arrow.up")
-                              }
-                          }
-                      }
-                  }
-              }
-          }
-
-          struct ProfileView: View {
-              @EnvironmentObject var store: StoreModel
-              @AppStorage("dde_theme") private var theme: String = "system"
-              @AppStorage("dde_wifi_only") private var wifiOnly: Bool = false
-              @AppStorage("dde_notif") private var notif: Bool = true
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          Section {
-                              HStack(spacing: 14) {
-                                  ZStack {
-                                      Circle().fill(LinearGradient(colors: [.blue, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                      Text("R").font(.title2.bold()).foregroundColor(.white)
-                                  }
-                                  .frame(width: 56, height: 56)
-                                  VStack(alignment: .leading, spacing: 2) {
-                                      Text("Rutik").font(.headline)
-                                      Text("Demo account - sandbox only").font(.caption).foregroundColor(.secondary)
-                                  }
-                              }
-                              .padding(.vertical, 4)
-                          }
-
-                          Section(header: Text("Appearance").textCase(nil)) {
-                              Picker("Theme", selection: $theme) {
-                                  Text("System").tag("system")
-                                  Text("Light").tag("light")
-                                  Text("Dark").tag("dark")
-                              }
-                          }
-
-                          Section(header: Text("Download Preferences").textCase(nil)) {
-                              Toggle("Download on Wi-Fi only", isOn: $wifiOnly)
-                              Toggle("Download notifications", isOn: $notif)
-                          }
-
-                          Section(header: Text("Storage").textCase(nil)) {
-                              let total = store.downloads.filter { $0.state == .installed }.reduce(0) { $0 + $1.app.sizeMB }
                               HStack {
-                                  Text("Used by installed apps (demo)")
-                                  Spacer()
-                                  Text("\(total) MB").foregroundColor(.secondary)
-                              }
-                              Button("Clear download history") { store.clearHistory() }
-                          }
-
-                          Section(header: Text("About").textCase(nil)) {
-                              HStack {
-                                  Text("DDE Store")
-                                  Spacer()
-                                  Text("v1.0.0 (iOS demo)").foregroundColor(.secondary)
-                              }
-                              Button("Privacy Policy") { store.showToast("Demo build - no data leaves this sandbox") }
-                              Button("About DDE Store") { store.showToast("DDE Store demo, built with SwiftUI") }
-                          }
-                      }
-                      .navigationTitle("Profile")
-                  }
-              }
-          }
-          struct AppLibRow: View {
-              let app: StoreApp
-              let subtitle: String
-              var body: some View {
-                  HStack(spacing: 12) {
-                      AppIcon(app: app, size: 46)
-                      VStack(alignment: .leading, spacing: 2) {
-                          Text(app.name).font(.headline)
-                          Text(subtitle).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                      }
-                  }
-                  .padding(.vertical, 4)
-              }
-          }
-
-          // MARK: - Library
-          struct LibraryView: View {
-              @EnvironmentObject var store: StoreModel
-
-              var installed: [DownloadItem] { store.downloads.filter { $0.state == .installed } }
-              var savedApps: [StoreApp] { store.saved.compactMap { n in catalogue.first { $0.name == n } } }
-              var recentApps: [StoreApp] { store.recentViews.compactMap { n in catalogue.first { $0.name == n } } }
-              var updatable: [StoreApp] {
-                  let installedNames = Set(installed.map { $0.app.name })
-                  return catalogue.filter { !installedNames.contains($0.name) }.prefix(2).map { $0 }
-              }
-
-              @ViewBuilder var savedSection: some View {
-                  Section(header: Text("Saved")) {
-                      if savedApps.isEmpty {
-                          Text("Nothing saved yet. Tap the heart on any app to save it here.")
-                              .font(.subheadline).foregroundColor(.secondary)
-                      } else {
-                          ForEach(savedApps) { app in
-                              NavigationLink(destination: AppDetailView(app: app)) {
-                                  AppLibRow(app: app, subtitle: app.category)
-                              }
-                          }
-                      }
-                  }
-              }
-
-              @ViewBuilder var recentSection: some View {
-                  Section(header: Text("Recently Viewed")) {
-                      if recentApps.isEmpty {
-                          Text("Apps you open will show up here.")
-                              .font(.subheadline).foregroundColor(.secondary)
-                      } else {
-                          ForEach(recentApps) { app in
-                              NavigationLink(destination: AppDetailView(app: app)) {
-                                  AppLibRow(app: app, subtitle: app.developer)
-                              }
-                          }
-                      }
-                  }
-              }
-
-              var body: some View {
-                  NavigationStack {
-                      List {
-                          if !updatable.isEmpty {
-                              Section(header: Text("Updates")) {
-                                  ForEach(updatable) { app in
-                                      HStack(spacing: 12) {
-                                          AppIcon(app: app, size: 46)
-                                          VStack(alignment: .leading, spacing: 2) {
-                                              Text(app.name).font(.headline)
-                                              Text("Update available (demo)").font(.caption).foregroundColor(.secondary)
-                                          }
-                                          Spacer()
-                                          GetButton(app: app)
-                                      }
-                                      .padding(.vertical, 4)
+                                  Button {
+                                      store.startDemoDownload(for: app)
+                                  } label: {
+                                      Text(store.library.contains(app.id) ? "Added" : "GET")
+                                          .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
+                                          .background(Color.blue, in: Capsule()).foregroundStyle(.white)
+                                  }
+                                  Button { } label: {
+                                      Image(systemName: "square.and.arrow.up")
+                                          .font(.headline).padding(12).background(.quaternary, in: Circle())
                                   }
                               }
-                          }
-
-                          savedSection
-                          recentSection
-
-                          Section(header: Text("Installed (Demo)")) {
-                              if installed.isEmpty {
-                                  Text("No demo installs yet. Get an app to see it here.")
-                                      .font(.subheadline).foregroundColor(.secondary)
-                              } else {
-                                  ForEach(installed) { item in
-                                      HStack(spacing: 12) {
-                                          AppIcon(app: item.app, size: 46)
-                                          VStack(alignment: .leading, spacing: 2) {
-                                              Text(item.app.name).font(.headline)
-                                              Text("Simulated install").font(.caption).foregroundColor(.secondary)
-                                          }
-                                          Spacer()
-                                          GetButton(app: item.app)
-                                      }
-                                      .padding(.vertical, 4)
-                                  }
+                              HStack(spacing: 0) {
+                                  metadata("VERSION", app.version)
+                                  metadata("SIZE", app.size)
+                                  metadata("CATEGORY", app.category)
                               }
-                          }
-
-                          Section { Spacer().frame(height: 80).listRowBackground(Color.clear) }
+                              Divider()
+                              VStack(alignment: .leading, spacing: 8) {
+                                  Text("About this app").font(.title3.bold())
+                                  Text(app.description).foregroundStyle(.secondary)
+                              }
+                              GlassPanel {
+                                  Label("Demo catalogue item", systemImage: "info.circle")
+                                      .font(.subheadline.weight(.semibold))
+                                  Text("GET adds this sample entry to the demo library. It does not install an iOS application.")
+                                      .font(.caption).foregroundStyle(.secondary)
+                              }
+                          }.padding(22)
                       }
-                      .listStyle(.insetGrouped)
-                      .navigationTitle("Library")
+                      .navigationTitle(app.name)
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .topBarTrailing) {
+                              Button("Done") { dismiss() }
+                          }
+                      }
+                  }
+              }
+
+              private func metadata(_ title: String, _ value: String) -> some View {
+                  VStack(spacing: 5) {
+                      Text(title).font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+                      Text(value).font(.caption.weight(.semibold)).lineLimit(1)
+                  }.frame(maxWidth: .infinity)
+              }
+          }
+          EOF_DDEGLASSSTORE_APPDETAILVIEW_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/StoreViewModel.swift')
+          cat > 'DDEGlassStore/StoreViewModel.swift' <<'EOF_DDEGLASSSTORE_STOREVIEWMODEL_SWIFT'
+          import SwiftUI
+
+          @MainActor
+          final class StoreViewModel: ObservableObject {
+              @Published var selectedTab = 0
+              @Published var searchText = ""
+              @Published var selectedCategory = "All"
+              @Published var downloads: [DownloadItem] = []
+              @Published var library: Set<String> = []
+              @Published var colorScheme: ColorScheme? = .dark
+
+              let categories = ["All", "Productivity", "Utilities", "Creativity", "Lifestyle", "Games"]
+
+              let apps: [StoreApp] = [
+                  StoreApp(id: "orbit", name: "Orbit Notes", developer: "Northstar Studio",
+                           subtitle: "A calmer space for your ideas",
+                           description: "Capture thoughts, organize projects and keep everyday ideas in one beautifully simple place.",
+                           category: "Productivity", version: "2.4.0", size: "42 MB",
+                           symbol: "note.text", tint: .indigo, isFeatured: true),
+                  StoreApp(id: "luma", name: "Luma Weather", developer: "Daylight Labs",
+                           subtitle: "Weather, with a little clarity",
+                           description: "A clean weather experience with daily forecasts and useful conditions at a glance.",
+                           category: "Utilities", version: "1.8.2", size: "28 MB",
+                           symbol: "sun.max.fill", tint: .orange),
+                  StoreApp(id: "frame", name: "Frame Studio", developer: "Pixel Foundry",
+                           subtitle: "Make every moment yours",
+                           description: "A sample creative toolkit for collecting inspiration and arranging visual ideas.",
+                           category: "Creativity", version: "3.1.0", size: "86 MB",
+                           symbol: "square.stack.3d.up.fill", tint: .pink),
+                  StoreApp(id: "tempo", name: "Tempo", developer: "Good Habit Co.",
+                           subtitle: "Small steps, steady days",
+                           description: "A lightweight habit companion with gentle reminders and simple progress views.",
+                           category: "Lifestyle", version: "1.2.1", size: "19 MB",
+                           symbol: "circle.grid.2x2.fill", tint: .mint),
+                  StoreApp(id: "monument", name: "Monument Valley", developer: "Demo Listing",
+                           subtitle: "A featured puzzle-game listing",
+                           description: "A sample catalogue entry for demonstrating the app detail layout. This is not a download listing.",
+                           category: "Games", version: "Demo", size: "—",
+                           symbol: "cube.fill", tint: .purple)
+              ]
+
+              var filteredApps: [StoreApp] {
+                  apps.filter { app in
+                      let categoryMatch = selectedCategory == "All" || app.category == selectedCategory
+                      let queryMatch = searchText.isEmpty ||
+                          app.name.localizedCaseInsensitiveContains(searchText) ||
+                          app.developer.localizedCaseInsensitiveContains(searchText) ||
+                          app.category.localizedCaseInsensitiveContains(searchText)
+                      return categoryMatch && queryMatch
+                  }
+              }
+
+              func startDemoDownload(for app: StoreApp) {
+                  guard !downloads.contains(where: { $0.id == app.id }) else { return }
+                  downloads.insert(DownloadItem(id: app.id, appName: app.name,
+                                                progress: 0, state: .downloading), at: 0)
+                  library.insert(app.id)
+                  guard let index = downloads.firstIndex(where: { $0.id == app.id }) else { return }
+                  // A short UI demonstration only; no file is downloaded.
+                  Task {
+                      for step in 1...20 {
+                          try? await Task.sleep(for: .milliseconds(90))
+                          guard downloads.indices.contains(index) else { return }
+                          downloads[index].progress = Double(step) / 20
+                      }
+                      if downloads.indices.contains(index) {
+                          downloads[index].state = .complete
+                      }
                   }
               }
           }
-          SWIFT
-      - name: Generate Xcode project
-        run: |
-          brew install xcodegen
-          cat > project.yml <<'YML'
-          name: DDEGlassStore
-          options:
-            bundleIdPrefix: com.rutik
-          targets:
-            DDEGlassStore:
-              type: application
-              platform: iOS
-              deploymentTarget: "17.0"
-              sources: [Sources]
-              settings:
-                base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.rutik.ddeglassstore
-                  PRODUCT_NAME: DDEGlassStore
-                  GENERATE_INFOPLIST_FILE: YES
-                  MARKETING_VERSION: "1.0"
-                  CURRENT_PROJECT_VERSION: "1"
-                  INFOPLIST_KEY_CFBundleDisplayName: DDE Glass Store
-                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
-          YML
-          xcodegen
+          EOF_DDEGLASSSTORE_STOREVIEWMODEL_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore.xcodeproj/project.pbxproj')
+          cat > 'DDEGlassStore.xcodeproj/project.pbxproj' <<'EOF_DDEGLASSSTORE_XCODEPROJ_PROJECT_PBXPROJ'
+          // !$*UTF8*$!
+          {
+           archiveVersion = 1;
+           classes = {};
+           objectVersion = 60;
+           objects = {
+            A10000000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 1600;}; buildConfigurationList = A10000000000000000000008; compatibilityVersion = "Xcode 15.0"; developmentRegion = en; mainGroup = A10000000000000000000002; productRefGroup = A10000000000000000000004; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000006,);};
+            A10000000000000000000002 = {isa = PBXGroup; children = (A10000000000000000000003, A10000000000000000000004,); sourceTree = "<group>";};
+            A10000000000000000000003 /* DDEGlassStore */ = {isa = PBXFileSystemSynchronizedRootGroup; path = DDEGlassStore; sourceTree = "<group>";};
+            A10000000000000000000004 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005,); name = Products; sourceTree = "<group>";};
+            A10000000000000000000005 /* DDEGlassStore.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DDEGlassStore.app; sourceTree = BUILT_PRODUCTS_DIR;};
+            A10000000000000000000006 /* DDEGlassStore */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000009; buildPhases = (A1000000000000000000000A, A1000000000000000000000B, A1000000000000000000000C,); buildRules = (); dependencies = (); fileSystemSynchronizedGroups = (A10000000000000000000003,); name = DDEGlassStore; productName = DDEGlassStore; productReference = A10000000000000000000005; productType = "com.apple.product-type.application";};
+            A10000000000000000000008 = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000D, A1000000000000000000000E,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+            A10000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (A1000000000000000000000F, A10000000000000000000010,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;};
+            A1000000000000000000000A = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+            A1000000000000000000000B = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+            A1000000000000000000000C = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
+            A1000000000000000000000D /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
+            A1000000000000000000000E /* Release */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+            A1000000000000000000000F /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
+            A10000000000000000000010 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+           };
+           rootObject = A10000000000000000000001;
+          }
+          EOF_DDEGLASSSTORE_XCODEPROJ_PROJECT_PBXPROJ
+          mkdir -p $(dirname 'README.md')
+          cat > 'README.md' <<'EOF_README_MD'
+          # DDE Glass Store — iOS Simulator Starter
+
+          A SwiftUI starter project for an original app-store-style interface inspired by modern iOS design.
+          It is not the proprietary DDE Store application and does not contain its private assets or catalogue.
+
+          ## Open
+          1. Extract this ZIP on a Mac.
+          2. Open `DDEGlassStore.xcodeproj` in Xcode.
+          3. Select an iPhone Simulator (iOS 17 or later).
+          4. Build and Run.
+
+          ## Appetize.io
+          Appetize requires a compiled iOS Simulator `.app` bundle, usually uploaded as a ZIP.
+          This source project is **not itself** a compiled `.app`. Build it in Xcode first:
+          - Product > Build
+          - In Xcode's Products group, locate `DDEGlassStore.app`
+          - Use the Simulator build (not an iPhone device/archive build)
+          - Zip the `.app` bundle and upload that ZIP to Appetize.
+
+          ## Current functionality
+          - Discover screen with featured and curated demo apps
+          - Search and category filtering
+          - App detail sheet
+          - Demo download queue (clearly marked as simulated)
+          - Library and settings screens
+          - Dark/light appearance preference
+
+          ## Important
+          The catalogue uses sample data and placeholder artwork. It does not download or install third-party apps.
+          Real iOS app installation from inside another ordinary iOS app is restricted by Apple's platform rules.
+          EOF_README_MD
+          mkdir -p $(dirname 'DDEGlassStore.xcodeproj/xcshareddata/xcschemes/DDEGlassStore.xcscheme')
+          cat > 'DDEGlassStore.xcodeproj/xcshareddata/xcschemes/DDEGlassStore.xcscheme' <<'EOF_DDEGLASSSTORE_XCODEPROJ_XCSHAREDDATA_XCSCHEMES_DDEGLASSSTORE_XCSCHEME'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Scheme LastUpgradeVersion = "1600" version = "1.7">
+             <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES" buildArchitectures = "Automatic">
+                <BuildActionEntries>
+                   <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
+                      <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "A10000000000000000000006" BuildableName = "DDEGlassStore.app" BlueprintName = "DDEGlassStore" ReferencedContainer = "container:DDEGlassStore.xcodeproj"/>
+                   </BuildActionEntry>
+                </BuildActionEntries>
+             </BuildAction>
+             <TestAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv = "YES"/>
+             <LaunchAction buildConfiguration = "Debug" selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle = "0" useCustomWorkingDirectory = "NO" ignoresPersistentStateOnLaunch = "NO" debugDocumentVersioning = "YES" debugServiceExtension = "internal" allowLocationSimulation = "YES">
+                <BuildableProductRunnable runnableDebuggingMode = "0">
+                   <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "A10000000000000000000006" BuildableName = "DDEGlassStore.app" BlueprintName = "DDEGlassStore" ReferencedContainer = "container:DDEGlassStore.xcodeproj"/>
+                </BuildableProductRunnable>
+             </LaunchAction>
+             <ProfileAction buildConfiguration = "Release" shouldUseLaunchSchemeArgsEnv = "YES" savedToolIdentifier = "" useCustomWorkingDirectory = "NO" debugDocumentVersioning = "YES">
+                <BuildableProductRunnable runnableDebuggingMode = "0">
+                   <BuildableReference BuildableIdentifier = "primary" BlueprintIdentifier = "A10000000000000000000006" BuildableName = "DDEGlassStore.app" BlueprintName = "DDEGlassStore" ReferencedContainer = "container:DDEGlassStore.xcodeproj"/>
+                </BuildableProductRunnable>
+             </ProfileAction>
+             <AnalyzeAction buildConfiguration = "Debug"/>
+             <ArchiveAction buildConfiguration = "Release" revealArchiveInOrganizer = "YES"/>
+          </Scheme>
+          EOF_DDEGLASSSTORE_XCODEPROJ_XCSHAREDDATA_XCSCHEMES_DDEGLASSSTORE_XCSCHEME
       - name: Build for iOS Simulator
         run: xcodebuild -project DDEGlassStore.xcodeproj -scheme DDEGlassStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Zip app bundle
@@ -1284,6 +641,6 @@ jobs:
           name: DDEGlassStore-simulator
           path: DDEGlassStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v5.0.0 DDEGlassStore-simulator.zip --title "DDE Glass Store v5 (iOS Simulator)" --notes "Unsigned iOS Simulator build - DDE Glass Store v5, ultra-fidelity iOS 26 liquid glass UI. Upload DDEGlassStore-simulator.zip to Appetize to run it."
+        run: gh release create v6.0.0 DDEGlassStore-simulator.zip --title "DDE Glass Store v6 - his starter project (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's own DDE Glass Store starter project. Upload DDEGlassStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
