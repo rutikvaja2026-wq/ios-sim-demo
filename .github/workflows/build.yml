@@ -959,7 +959,7 @@ jobs:
                   Text(name).font(.title3.bold()).padding(.horizontal).padding(.top, 14)
                   ForEach(apps) { app in
                       NavigationLink(destination: AppDetailView(app: app)) {
-                          GlassCard { AppLibRow(app: app, subtitle: app.tagline) }
+                          GlassCard { AppLibRow(app: app, subtitle: app.desc) }
                       }
                       .buttonStyle(.plain)
                       .padding(.horizontal)
