@@ -1,0 +1,136 @@
+name: Build iOS Simulator App
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Write app source
+        run: |
+          mkdir -p Sources
+          cat > Sources/DemoApp.swift <<'SWIFT'
+          import SwiftUI
+
+          @main
+          struct DemoApp: App {
+              var body: some Scene {
+                  WindowGroup { ContentView() }
+              }
+          }
+
+          struct ContentView: View {
+              @State private var animateGradient = false
+              @State private var count = 0
+              @State private var spin = false
+
+              let cards: [(String, String, Color)] = [
+                  ("iphone", "Real iOS app", .blue),
+                  ("checkmark.seal.fill", "Built on a Mac runner", .green),
+                  ("bolt.fill", "Running in a sandbox", .orange),
+                  ("heart.fill", "Made for Rutik", .red)
+              ]
+
+              var body: some View {
+                  ZStack {
+                      LinearGradient(colors: [.indigo, .purple, .pink],
+                                     startPoint: animateGradient ? .topLeading : .bottomLeading,
+                                     endPoint: animateGradient ? .bottomTrailing : .topTrailing)
+                          .ignoresSafeArea()
+                          .onAppear {
+                              withAnimation(.easeInOut(duration: 6).repeatForever(autoreverses: true)) {
+                                  animateGradient.toggle()
+                              }
+                          }
+                      ScrollView {
+                          VStack(spacing: 24) {
+                              Image(systemName: "star.fill")
+                                  .font(.system(size: 72))
+                                  .foregroundColor(.white)
+                                  .shadow(radius: 12)
+                                  .rotationEffect(.degrees(spin ? 360 : 0))
+                                  .onAppear {
+                                      withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
+                                          spin = true
+                                      }
+                                  }
+                              Text("Hello, Rutik!")
+                                  .font(.largeTitle.bold())
+                                  .foregroundColor(.white)
+                              Text("This is a real iOS app,\nbuilt with SwiftUI and running\ninside a simulator sandbox.")
+                                  .multilineTextAlignment(.center)
+                                  .foregroundColor(.white.opacity(0.9))
+                              Button(action: { count += 1 }) {
+                                  Text(count == 0 ? "Tap me" : "Tapped \(count) times")
+                                      .font(.headline)
+                                      .padding(.horizontal, 28)
+                                      .padding(.vertical, 14)
+                                      .background(.white)
+                                      .foregroundColor(.purple)
+                                      .cornerRadius(30)
+                                      .shadow(radius: 6)
+                              }
+                              ForEach(cards, id: \.0) { icon, text, color in
+                                  HStack(spacing: 14) {
+                                      Image(systemName: icon)
+                                          .font(.title2)
+                                          .foregroundColor(color)
+                                      Text(text)
+                                          .font(.headline)
+                                      Spacer()
+                                  }
+                                  .padding()
+                                  .background(.white.opacity(0.92))
+                                  .cornerRadius(16)
+                                  .shadow(radius: 4)
+                                  .padding(.horizontal)
+                              }
+                          }
+                          .padding(.top, 60)
+                          .padding(.bottom, 40)
+                      }
+                  }
+              }
+          }
+          SWIFT
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          cat > project.yml <<'YML'
+          name: DemoApp
+          options:
+            bundleIdPrefix: com.demo
+          targets:
+            DemoApp:
+              type: application
+              platform: iOS
+              deploymentTarget: "16.0"
+              sources: [Sources]
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: com.demo.iosSimDemo
+                  PRODUCT_NAME: DemoApp
+                  GENERATE_INFOPLIST_FILE: YES
+          YML
+          xcodegen
+      - name: Build for iOS Simulator
+        run: xcodebuild -project DemoApp.xcodeproj -scheme DemoApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+      - name: Zip app bundle
+        run: |
+          cd build/Build/Products/Release-iphonesimulator
+          zip -r "$GITHUB_WORKSPACE/DemoApp-simulator.zip" DemoApp.app
+          cd "$GITHUB_WORKSPACE"
+          unzip -l DemoApp-simulator.zip | head -20
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DemoApp-simulator
+          path: DemoApp-simulator.zip
+      - name: Publish release with zip
+        run: gh release create v1.0.0 DemoApp-simulator.zip --title "iOS Simulator Demo App" --notes "Unsigned iOS Simulator build of DemoApp. Upload DemoApp-simulator.zip to Appetize to run it."
+        env:
+          GH_TOKEN: ${{ github.token }}
