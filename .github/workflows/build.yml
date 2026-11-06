@@ -33,7 +33,7 @@ jobs:
                           VStack(alignment: .leading, spacing: 18) {
                               ScreenTitle(eyebrow: "Browse the catalogue", title: "Apps")
                               Text("Explore popular App Store categories").font(.subheadline).foregroundStyle(.secondary)
-                              ForEach(categories, id: \\.self) { category in
+                              ForEach(categories, id: \.self) { category in
                                   Button {
                                       store.searchText = category
                                       store.search(category)
@@ -542,7 +542,7 @@ jobs:
 
           struct AppDetailView: View {
               @EnvironmentObject private var store: StoreViewModel
-              @Environment(\\.dismiss) private var dismiss
+              @Environment(\.dismiss) private var dismiss
               let app: StoreApp
 
               var body: some View {
