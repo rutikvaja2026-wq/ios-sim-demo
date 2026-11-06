@@ -11,6 +11,11 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - name: Select latest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s $(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          xcodebuild -version
       - name: Write project files
         run: |
           mkdir -p $(dirname 'DDEGlassStore/AppsAndSearchViews.swift')
@@ -19,37 +24,29 @@ jobs:
 
           struct AppsView: View {
               @EnvironmentObject private var store: StoreViewModel
-              @State private var selectedApp: StoreApp?
+              @State private var selected: StoreApp?
+              private let categories = ["social networking", "photo editor", "music", "productivity", "games"]
 
               var body: some View {
                   NavigationStack {
                       ScrollView {
                           VStack(alignment: .leading, spacing: 18) {
-                              Text("Apps").font(.largeTitle.bold())
-                              categoryPicker
-                              ForEach(store.filteredApps) { app in
-                                  AppRow(app: app) { selectedApp = app }
+                              ScreenTitle(eyebrow: "Browse the catalogue", title: "Apps")
+                              Text("Explore popular App Store categories").font(.subheadline).foregroundStyle(.secondary)
+                              ForEach(categories, id: \\.self) { category in
+                                  Button {
+                                      store.searchText = category
+                                      store.search(category)
+                                      store.selectedTab = 2
+                                  } label: {
+                                      HStack {
+                                          Text(category.capitalized).font(.headline)
+                                          Spacer()
+                                          Image(systemName: "arrow.up.right").foregroundStyle(.secondary)
+                                      }.padding(16).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                                  }.buttonStyle(.plain)
                               }
                           }.padding(20)
-                      }
-                      .sheet(item: $selectedApp) { AppDetailView(app: $0) }
-                  }
-              }
-
-              private var categoryPicker: some View {
-                  ScrollView(.horizontal, showsIndicators: false) {
-                      HStack {
-                          ForEach(store.categories, id: \.self) { category in
-                              Button {
-                                  store.selectedCategory = category
-                              } label: {
-                                  Text(category).font(.subheadline.weight(.semibold))
-                                      .padding(.horizontal, 14).padding(.vertical, 9)
-                                      .background(store.selectedCategory == category ? Color.primary.opacity(0.13) : Color.clear,
-                                                  in: Capsule())
-                                      .overlay(Capsule().strokeBorder(.primary.opacity(0.1)))
-                              }.buttonStyle(.plain)
-                          }
                       }
                   }
               }
@@ -57,33 +54,41 @@ jobs:
 
           struct SearchView: View {
               @EnvironmentObject private var store: StoreViewModel
-              @State private var selectedApp: StoreApp?
+              @State private var selected: StoreApp?
 
               var body: some View {
                   NavigationStack {
                       ScrollView {
                           VStack(alignment: .leading, spacing: 18) {
-                              Text("Search").font(.largeTitle.bold())
-                              HStack {
+                              ScreenTitle(eyebrow: "Find your next favourite", title: "Search")
+                              HStack(spacing: 10) {
                                   Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                                   TextField("Apps, games and more", text: $store.searchText)
-                                      .autocorrectionDisabled()
+                                      .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                      .onChange(of: store.searchText) { _, value in
+                                          store.search(value)
+                                      }
                                   if !store.searchText.isEmpty {
-                                      Button { store.searchText = "" } label: {
+                                      Button { store.searchText = ""; store.apps = [] } label: {
                                           Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                                       }
                                   }
                               }
-                              .padding(14).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-                              ForEach(store.filteredApps) { app in
-                                  AppRow(app: app) { selectedApp = app }
+                              .padding(15).background(.regularMaterial, in: Capsule())
+                              if store.isLoading { ProgressView().frame(maxWidth: .infinity).padding() }
+                              if let error = store.errorMessage {
+                                  ContentUnavailableView("Search unavailable", systemImage: "wifi.exclamationmark",
+                                                         description: Text(error))
                               }
-                              if store.filteredApps.isEmpty {
+                              ForEach(store.apps) { app in
+                                  AppRow(app: app) { selected = app }
+                              }
+                              if store.apps.isEmpty && !store.searchText.isEmpty && !store.isLoading {
                                   ContentUnavailableView.search(text: store.searchText)
                               }
                           }.padding(20)
                       }
-                      .sheet(item: $selectedApp) { AppDetailView(app: $0) }
+                      .sheet(item: $selected) { AppDetailView(app: $0) }
                   }
               }
           }
@@ -92,50 +97,95 @@ jobs:
           cat > 'DDEGlassStore/GlassStyle.swift' <<'EOF_DDEGLASSSTORE_GLASSSTYLE_SWIFT'
           import SwiftUI
 
-          struct GlassPanel<Content: View>: View {
+          struct GlassCard<Content: View>: View {
+              var radius: CGFloat = 26
               var padding: CGFloat = 16
               @ViewBuilder var content: Content
 
               var body: some View {
                   content
                       .padding(padding)
-                      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                      .overlay {
-                          RoundedRectangle(cornerRadius: 24, style: .continuous)
-                              .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                      .background {
+                          if #available(iOS 26.0, *) {
+                              RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                  .fill(.clear)
+                                  .glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+                          } else {
+                              RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                  .fill(.ultraThinMaterial)
+                          }
                       }
+                      .overlay {
+                          RoundedRectangle(cornerRadius: radius, style: .continuous)
+                              .strokeBorder(
+                                  LinearGradient(colors: [.white.opacity(0.30), .white.opacity(0.04)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing),
+                                  lineWidth: 1
+                              )
+                      }
+                      .shadow(color: .black.opacity(0.12), radius: 18, y: 9)
               }
           }
 
-          struct AppIconView: View {
+          struct CapsuleActionStyle: ButtonStyle {
+              var prominent = false
+              func makeBody(configuration: Configuration) -> some View {
+                  configuration.label
+                      .font(.system(.subheadline, design: .rounded, weight: .bold))
+                      .foregroundStyle(prominent ? Color.white : Color.primary)
+                      .padding(.horizontal, 18)
+                      .padding(.vertical, 10)
+                      .background {
+                          if #available(iOS 26.0, *) {
+                              Capsule().fill(.clear)
+                                  .glassEffect(
+                                      prominent ? .regular.tint(.blue).interactive() : .regular.interactive(),
+                                      in: Capsule()
+                                  )
+                          } else {
+                              Capsule().fill(prominent ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(.ultraThinMaterial))
+                          }
+                      }
+                      .overlay(Capsule().strokeBorder(.white.opacity(configuration.isPressed ? 0.28 : 0.13)))
+                      .scaleEffect(configuration.isPressed ? 0.94 : 1)
+                      .brightness(configuration.isPressed ? 0.08 : 0)
+                      .animation(.spring(response: 0.26, dampingFraction: 0.62), value: configuration.isPressed)
+              }
+          }
+
+          struct AppArtwork: View {
               let app: StoreApp
-              var size: CGFloat = 58
-
+              var size: CGFloat = 68
               var body: some View {
-                  RoundedRectangle(cornerRadius: size * 0.25, style: .continuous)
-                      .fill(LinearGradient(colors: [app.tint.opacity(0.95), app.tint.opacity(0.55)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing))
-                      .overlay {
-                          Image(systemName: app.symbol)
-                              .font(.system(size: size * 0.42, weight: .semibold))
-                              .foregroundStyle(.white)
+                  AsyncImage(url: app.artworkUrl512 ?? app.artworkUrl100) { phase in
+                      switch phase {
+                      case .success(let image):
+                          image.resizable().scaledToFill()
+                      case .failure:
+                          fallback
+                      default:
+                          fallback.overlay { ProgressView().tint(.white) }
                       }
-                      .frame(width: size, height: size)
-                      .shadow(color: app.tint.opacity(0.22), radius: 12, y: 6)
+                  }
+                  .frame(width: size, height: size)
+                  .clipShape(RoundedRectangle(cornerRadius: size * 0.23, style: .continuous))
+                  .overlay(RoundedRectangle(cornerRadius: size * 0.23).strokeBorder(.white.opacity(0.18)))
+                  .shadow(color: .black.opacity(0.16), radius: 9, y: 5)
+              }
+              private var fallback: some View {
+                  RoundedRectangle(cornerRadius: size * 0.23)
+                      .fill(LinearGradient(colors: [.indigo, .purple], startPoint: .topLeading, endPoint: .bottomTrailing))
+                      .overlay(Image(systemName: "app.fill").font(.system(size: size * 0.38)).foregroundStyle(.white))
               }
           }
 
-          struct SectionHeading: View {
+          struct ScreenTitle: View {
+              let eyebrow: String
               let title: String
-              var trailing: String? = nil
-
               var body: some View {
-                  HStack {
-                      Text(title).font(.title2.bold())
-                      Spacer()
-                      if let trailing {
-                          Text(trailing).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                      }
+                  VStack(alignment: .leading, spacing: 5) {
+                      Text(eyebrow.uppercased()).font(.caption2.weight(.bold)).tracking(1.6).foregroundStyle(.secondary)
+                      Text(title).font(.system(size: 34, weight: .bold, design: .rounded)).tracking(-0.8)
                   }
               }
           }
@@ -159,31 +209,47 @@ jobs:
           EOF_DDEGLASSSTORE_APP_SWIFT
           mkdir -p $(dirname 'DDEGlassStore/Models.swift')
           cat > 'DDEGlassStore/Models.swift' <<'EOF_DDEGLASSSTORE_MODELS_SWIFT'
-          import SwiftUI
+          import Foundation
 
-          struct StoreApp: Identifiable, Hashable {
-              let id: String
-              let name: String
-              let developer: String
-              let subtitle: String
-              let description: String
-              let category: String
-              let version: String
-              let size: String
-              let symbol: String
-              let tint: Color
-              var isFeatured: Bool = false
+          struct StoreApp: Identifiable, Hashable, Decodable {
+              let trackId: Int
+              let trackName: String
+              let sellerName: String?
+              let artistName: String?
+              let description: String?
+              let artworkUrl512: URL?
+              let artworkUrl100: URL?
+              let trackViewUrl: URL?
+              let version: String?
+              let averageUserRating: Double?
+              let primaryGenreName: String?
+              let fileSizeBytes: String?
+              let formattedPrice: String?
+
+              var id: Int { trackId }
+              var developer: String { sellerName ?? artistName ?? "Unknown developer" }
+              var subtitle: String { primaryGenreName ?? "App Store app" }
+              var sizeText: String {
+                  guard let fileSizeBytes, let bytes = Double(fileSizeBytes) else { return "—" }
+                  return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+              }
+              var ratingText: String {
+                  guard let averageUserRating else { return "Not rated" }
+                  return String(format: "%.1f ★", averageUserRating)
+              }
+              var priceText: String { formattedPrice ?? "View in App Store" }
           }
 
-          enum DownloadState: Equatable {
-              case notStarted, downloading, complete
+          struct SearchResponse: Decodable {
+              let resultCount: Int
+              let results: [StoreApp]
           }
 
-          struct DownloadItem: Identifiable {
-              let id: String
-              let appName: String
-              var progress: Double
-              var state: DownloadState
+          struct DownloadTaskItem: Identifiable {
+              let id: Int
+              let title: String
+              var detail: String
+              var isComplete: Bool
           }
           EOF_DDEGLASSSTORE_MODELS_SWIFT
           mkdir -p $(dirname 'DDEGlassStore/DiscoverView.swift')
@@ -192,140 +258,160 @@ jobs:
 
           struct DiscoverView: View {
               @EnvironmentObject private var store: StoreViewModel
-              @State private var selectedApp: StoreApp?
+              @State private var selected: StoreApp?
 
               var body: some View {
                   NavigationStack {
                       ScrollView(showsIndicators: false) {
-                          VStack(alignment: .leading, spacing: 26) {
-                              header
-                              if let featured = store.apps.first(where: \.isFeatured) {
-                                  featuredCard(featured)
+                          VStack(alignment: .leading, spacing: 25) {
+                              HStack {
+                                  ScreenTitle(eyebrow: "A little something for you", title: "Discover")
+                                  Spacer()
+                                  Image(systemName: "person.crop.circle.fill").font(.system(size: 34)).foregroundStyle(.secondary)
                               }
-                              VStack(alignment: .leading, spacing: 14) {
-                                  SectionHeading(title: "Popular right now", trailing: "See all")
-                                  ForEach(store.apps.filter { !$0.isFeatured }) { app in
-                                      AppRow(app: app) { selectedApp = app }
-                                  }
+                              if let feature = store.featuredApps.first {
+                                  featureCard(feature)
+                              } else if store.isLoading {
+                                  ProgressView().frame(maxWidth: .infinity).padding(50)
                               }
-                              VStack(alignment: .leading, spacing: 14) {
-                                  SectionHeading(title: "Explore categories")
-                                  ScrollView(.horizontal, showsIndicators: false) {
-                                      HStack {
-                                          ForEach(store.categories.filter { $0 != "All" }, id: \.self) { category in
-                                              Button {
-                                                  store.selectedCategory = category
-                                                  store.selectedTab = 1
-                                              } label: {
-                                                  Text(category).font(.subheadline.weight(.semibold))
-                                                      .padding(.horizontal, 16).padding(.vertical, 11)
-                                                      .background(.ultraThinMaterial, in: Capsule())
-                                              }.buttonStyle(.plain)
-                                          }
-                                      }
-                                  }
+                              HStack {
+                                  Text("Popular discoveries").font(.title2.bold())
+                                  Spacer()
+                                  Button("See all") { store.selectedTab = 1 }.font(.subheadline.weight(.semibold))
                               }
-                          }
-                          .padding(.horizontal, 20)
-                          .padding(.top, 16)
-                          .padding(.bottom, 24)
+                              if store.featuredApps.isEmpty && !store.isLoading {
+                                  GlassCard { ContentUnavailableView("No featured apps", systemImage: "app.dashed",
+                                                                     description: Text("Try Search to explore the App Store catalogue.")) }
+                              }
+                              ForEach(store.featuredApps.prefix(8)) { app in
+                                  AppRow(app: app) { selected = app }
+                              }
+                              GlassCard {
+                                  Label("Real App Store catalogue", systemImage: "checkmark.seal.fill")
+                                      .font(.headline)
+                                  Text("App names, artwork and product links are retrieved from Apple's public Search API. Installations happen through the official App Store.")
+                                      .font(.caption).foregroundStyle(.secondary)
+                              }
+                          }.padding(.horizontal, 20).padding(.top, 18).padding(.bottom, 24)
                       }
                       .toolbar(.hidden, for: .navigationBar)
-                      .sheet(item: $selectedApp) { AppDetailView(app: $0) }
+                      .sheet(item: $selected) { AppDetailView(app: $0) }
                   }
               }
 
-              private var header: some View {
-                  HStack(alignment: .center) {
-                      VStack(alignment: .leading, spacing: 4) {
-                          Text("FRIDAY, NOVEMBER 6").font(.caption2.weight(.bold)).tracking(1.3).foregroundStyle(.secondary)
-                          Text("Discover").font(.largeTitle.bold())
-                      }
-                      Spacer()
-                      Image(systemName: "person.crop.circle.fill")
-                          .font(.system(size: 34)).foregroundStyle(.secondary)
-                  }
-              }
-
-              private func featuredCard(_ app: StoreApp) -> some View {
-                  Button { selectedApp = app } label: {
+              private func featureCard(_ app: StoreApp) -> some View {
+                  Button { selected = app } label: {
                       ZStack(alignment: .bottomLeading) {
-                          RoundedRectangle(cornerRadius: 30).fill(
-                              LinearGradient(colors: [.indigo, .purple, .blue.opacity(0.8)],
-                                             startPoint: .topLeading, endPoint: .bottomTrailing))
-                          Circle().fill(.white.opacity(0.12)).frame(width: 190).offset(x: 210, y: -55)
+                          RoundedRectangle(cornerRadius: 30)
+                              .fill(LinearGradient(colors: [.indigo, .purple, .blue],
+                                                   startPoint: .topLeading, endPoint: .bottomTrailing))
+                          Circle().fill(.white.opacity(0.10)).frame(width: 220).offset(x: 190, y: -65)
                           VStack(alignment: .leading, spacing: 12) {
-                              Text("EDITOR'S FEATURE").font(.caption2.bold()).tracking(1.5).foregroundStyle(.white.opacity(0.8))
-                              AppIconView(app: app, size: 66)
-                              Text(app.name).font(.title.bold()).foregroundStyle(.white)
-                              Text(app.subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.85))
-                              Text("EXPLORE  →").font(.caption.bold()).tracking(1).foregroundStyle(.white)
+                              Text("FEATURED DISCOVERY").font(.caption2.bold()).tracking(1.6).foregroundStyle(.white.opacity(0.8))
+                              AppArtwork(app: app, size: 76)
+                              Text(app.trackName).font(.largeTitle.bold()).foregroundStyle(.white).lineLimit(1)
+                              Text(app.developer).font(.subheadline).foregroundStyle(.white.opacity(0.82))
+                              HStack {
+                                  Text("EXPLORE APP").font(.caption.bold()).tracking(1)
+                                  Image(systemName: "arrow.up.right").font(.caption.bold())
+                              }.foregroundStyle(.white)
                           }.padding(22)
-                      }
-                      .frame(height: 260).clipShape(RoundedRectangle(cornerRadius: 30))
+                      }.frame(height: 285).clipShape(RoundedRectangle(cornerRadius: 30))
                   }.buttonStyle(.plain)
               }
           }
 
           struct AppRow: View {
-              @EnvironmentObject private var store: StoreViewModel
               let app: StoreApp
               var action: () -> Void
-
               var body: some View {
-                  HStack(spacing: 13) {
-                      AppIconView(app: app)
-                      VStack(alignment: .leading, spacing: 4) {
-                          Text(app.name).font(.headline)
-                          Text(app.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                          Text(app.category.uppercased()).font(.system(size: 9, weight: .bold)).tracking(0.8).foregroundStyle(.tertiary)
+                  Button(action: action) {
+                      HStack(spacing: 13) {
+                          AppArtwork(app: app, size: 62)
+                          VStack(alignment: .leading, spacing: 4) {
+                              Text(app.trackName).font(.headline).lineLimit(1)
+                              Text(app.developer).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                              Text(app.subtitle).font(.caption2).foregroundStyle(.tertiary)
+                          }
+                          Spacer(minLength: 4)
+                          Text("VIEW").font(.caption.bold()).foregroundStyle(.blue)
+                              .padding(.horizontal, 15).padding(.vertical, 8)
+                              .background(.ultraThinMaterial, in: Capsule())
                       }
-                      Spacer()
-                      Button("GET") { store.startDemoDownload(for: app) }
-                          .font(.caption.bold()).foregroundStyle(.blue)
-                          .padding(.horizontal, 17).padding(.vertical, 8)
-                          .background(.quaternary, in: Capsule())
-                      Button(action: action) {
-                          Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
-                      }
-                  }
-                  .padding(12)
-                  .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+                      .padding(11)
+                      .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                      .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(.white.opacity(0.12)))
+                  }.buttonStyle(.plain)
               }
           }
           EOF_DDEGLASSSTORE_DISCOVERVIEW_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/ProfileView.swift')
+          cat > 'DDEGlassStore/ProfileView.swift' <<'EOF_DDEGLASSSTORE_PROFILEVIEW_SWIFT'
+          import SwiftUI
+
+          struct ProfileView: View {
+              @EnvironmentObject private var store: StoreViewModel
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          Section {
+                              HStack(spacing: 14) {
+                                  Image(systemName: "person.crop.circle.fill").font(.system(size: 48)).foregroundStyle(.secondary)
+                                  VStack(alignment: .leading) {
+                                      Text("Guest profile").font(.headline)
+                                      Text("Your saved app discoveries").font(.caption).foregroundStyle(.secondary)
+                                  }
+                              }.padding(.vertical, 8)
+                          }
+                          Section("Appearance") {
+                              Picker("Theme", selection: Binding(
+                                  get: { store.colorScheme == .light ? "Light" : "Dark" },
+                                  set: { store.colorScheme = $0 == "Light" ? .light : .dark }
+                              )) {
+                                  Text("Dark").tag("Dark")
+                                  Text("Light").tag("Light")
+                              }
+                          }
+                          Section("About") {
+                              LabeledContent("Version", value: "1.0 Starter")
+                              LabeledContent("Catalogue", value: "Apple Search API")
+                          }
+                      }.navigationTitle("Profile")
+                  }
+              }
+          }
+          EOF_DDEGLASSSTORE_PROFILEVIEW_SWIFT
           mkdir -p $(dirname 'DDEGlassStore/DownloadsView.swift')
           cat > 'DDEGlassStore/DownloadsView.swift' <<'EOF_DDEGLASSSTORE_DOWNLOADSVIEW_SWIFT'
           import SwiftUI
 
           struct DownloadsView: View {
               @EnvironmentObject private var store: StoreViewModel
-
               var body: some View {
                   NavigationStack {
                       ScrollView {
                           VStack(alignment: .leading, spacing: 18) {
-                              Text("Downloads").font(.largeTitle.bold())
-                              GlassPanel {
-                                  Label("Demo download manager", systemImage: "arrow.down.circle")
-                                      .font(.headline)
-                                  Text("Progress shown here is a UI demonstration. No third-party app files are downloaded or installed.")
+                              ScreenTitle(eyebrow: "Your activity", title: "Downloads")
+                              GlassCard {
+                                  Label("Install through the App Store", systemImage: "arrow.down.app.fill").font(.headline)
+                                  Text("When you choose View in App Store on an app page, the official product page opens. Downloading and installation are handled by Apple's App Store.")
                                       .font(.caption).foregroundStyle(.secondary)
                               }
-                              if store.downloads.isEmpty {
-                                  ContentUnavailableView("No Downloads", systemImage: "arrow.down.circle",
-                                                         description: Text("Apps you add from the catalogue will appear here."))
+                              if store.tasks.isEmpty {
+                                  ContentUnavailableView("Nothing here yet", systemImage: "arrow.down.circle",
+                                                         description: Text("Your catalogue activity will appear here."))
                               } else {
-                                  ForEach(store.downloads) { item in
-                                      VStack(alignment: .leading, spacing: 10) {
+                                  ForEach(store.tasks) { item in
+                                      GlassCard {
                                           HStack {
-                                              Text(item.appName).font(.headline)
+                                              VStack(alignment: .leading, spacing: 5) {
+                                                  Text(item.title).font(.headline)
+                                                  Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                                              }
                                               Spacer()
-                                              Text(item.state == .complete ? "Done" : "\(Int(item.progress * 100))%")
-                                                  .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                              Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                                           }
-                                          ProgressView(value: item.progress)
-                                      }.padding(15).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+                                      }
                                   }
                               }
                           }.padding(20)
@@ -334,6 +420,45 @@ jobs:
               }
           }
           EOF_DDEGLASSSTORE_DOWNLOADSVIEW_SWIFT
+          mkdir -p $(dirname 'DDEGlassStore/StoreAPI.swift')
+          cat > 'DDEGlassStore/StoreAPI.swift' <<'EOF_DDEGLASSSTORE_STOREAPI_SWIFT'
+          import Foundation
+
+          enum StoreAPIError: LocalizedError {
+              case invalidResponse
+              case noResults
+              var errorDescription: String? {
+                  switch self {
+                  case .invalidResponse: return "The App Store response could not be read."
+                  case .noResults: return "No matching apps were found."
+                  }
+              }
+          }
+
+          /// Apple's public iTunes Search API returns App Store metadata and product-page links.
+          /// It does not return IPA files and cannot install apps.
+          struct StoreAPI {
+              func searchApps(term: String, limit: Int = 30) async throws -> [StoreApp] {
+                  var components = URLComponents(string: "https://itunes.apple.com/search")!
+                  components.queryItems = [
+                      URLQueryItem(name: "term", value: term),
+                      URLQueryItem(name: "entity", value: "software"),
+                      URLQueryItem(name: "country", value: "in"),
+                      URLQueryItem(name: "limit", value: String(limit))
+                  ]
+                  guard let url = components.url else { throw StoreAPIError.invalidResponse }
+                  var request = URLRequest(url: url)
+                  request.timeoutInterval = 20
+                  request.setValue("application/json", forHTTPHeaderField: "Accept")
+                  let (data, response) = try await URLSession.shared.data(for: request)
+                  guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                      throw StoreAPIError.invalidResponse
+                  }
+                  let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
+                  return decoded.results
+              }
+          }
+          EOF_DDEGLASSSTORE_STOREAPI_SWIFT
           mkdir -p $(dirname 'DDEGlassStore/RootView.swift')
           cat > 'DDEGlassStore/RootView.swift' <<'EOF_DDEGLASSSTORE_ROOTVIEW_SWIFT'
           import SwiftUI
@@ -343,54 +468,68 @@ jobs:
 
               var body: some View {
                   ZStack(alignment: .bottom) {
-                      LinearGradient(colors: [Color(uiColor: .systemBackground),
-                                              Color.indigo.opacity(0.08),
-                                              Color(uiColor: .systemBackground)],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing)
-                          .ignoresSafeArea()
-
+                      background
                       Group {
                           switch store.selectedTab {
                           case 1: AppsView()
                           case 2: SearchView()
                           case 3: DownloadsView()
+                          case 4: ProfileView()
                           default: DiscoverView()
                           }
                       }
-                      .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 82) }
-
+                      .id(store.selectedTab)
+                      .transition(.opacity.combined(with: .move(edge: .bottom)))
+                      .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 90) }
                       tabBar
                   }
-                  .tint(.primary)
+                  .task { await store.loadFeatured() }
+              }
+
+              private var background: some View {
+                  ZStack {
+                      Color(uiColor: .systemBackground)
+                      RadialGradient(colors: [.blue.opacity(0.16), .clear],
+                                     center: .topTrailing, startRadius: 10, endRadius: 440)
+                      RadialGradient(colors: [.purple.opacity(0.11), .clear],
+                                     center: .bottomLeading, startRadius: 5, endRadius: 380)
+                  }.ignoresSafeArea()
               }
 
               private var tabBar: some View {
-                  HStack(spacing: 0) {
-                      tab("Discover", icon: "sparkles", index: 0)
-                      tab("Apps", icon: "square.grid.2x2", index: 1)
-                      tab("Search", icon: "magnifyingglass", index: 2)
-                      tab("Downloads", icon: "arrow.down.circle", index: 3)
+                  HStack(spacing: 2) {
+                      tab("Today", "sparkles", 0)
+                      tab("Apps", "square.grid.2x2.fill", 1)
+                      tab("Search", "magnifyingglass", 2)
+                      tab("Downloads", "arrow.down.circle", 3)
+                      tab("Profile", "person.crop.circle", 4)
                   }
-                  .padding(.vertical, 12)
-                  .background(.ultraThinMaterial, in: Capsule())
-                  .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
-                  .shadow(color: .black.opacity(0.16), radius: 22, y: 8)
-                  .padding(.horizontal, 22)
-                  .padding(.bottom, 8)
+                  .padding(.horizontal, 8).padding(.vertical, 10)
+                  .background {
+                      if #available(iOS 26.0, *) {
+                          Capsule().fill(.clear).glassEffect(.regular, in: Capsule())
+                      } else {
+                          Capsule().fill(.regularMaterial)
+                      }
+                  }
+                  .overlay(Capsule().strokeBorder(.white.opacity(0.24), lineWidth: 1))
+                  .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
+                  .padding(.horizontal, 14).padding(.bottom, 7)
               }
 
-              private func tab(_ title: String, icon: String, index: Int) -> some View {
+              private func tab(_ title: String, _ symbol: String, _ index: Int) -> some View {
                   Button {
-                      withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                      withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) {
                           store.selectedTab = index
                       }
                   } label: {
-                      VStack(spacing: 5) {
-                          Image(systemName: icon).font(.system(size: 19, weight: .semibold))
-                          Text(title).font(.system(size: 10, weight: .semibold))
+                      VStack(spacing: 4) {
+                          Image(systemName: symbol).font(.system(size: 18, weight: .semibold))
+                              .symbolEffect(.bounce, value: store.selectedTab == index)
+                          Text(title).font(.system(size: 9, weight: .semibold))
                       }
-                      .foregroundStyle(store.selectedTab == index ? Color.primary : Color.secondary)
-                      .frame(maxWidth: .infinity)
+                      .foregroundStyle(store.selectedTab == index ? Color.accentColor : Color.secondary)
+                      .frame(maxWidth: .infinity).padding(.vertical, 3)
                       .contentShape(Rectangle())
                   }
                   .buttonStyle(.plain)
@@ -403,63 +542,62 @@ jobs:
 
           struct AppDetailView: View {
               @EnvironmentObject private var store: StoreViewModel
-              @Environment(\.dismiss) private var dismiss
+              @Environment(\\.dismiss) private var dismiss
               let app: StoreApp
 
               var body: some View {
                   NavigationStack {
                       ScrollView {
                           VStack(alignment: .leading, spacing: 22) {
-                              HStack(spacing: 16) {
-                                  AppIconView(app: app, size: 88)
-                                  VStack(alignment: .leading, spacing: 6) {
-                                      Text(app.name).font(.title2.bold())
+                              HStack(alignment: .top, spacing: 16) {
+                                  AppArtwork(app: app, size: 104)
+                                  VStack(alignment: .leading, spacing: 7) {
+                                      Text(app.trackName).font(.title2.bold()).lineLimit(2)
                                       Text(app.developer).font(.subheadline).foregroundStyle(.secondary)
-                                      Text(app.subtitle).font(.caption).foregroundStyle(.secondary)
+                                      Text(app.subtitle).font(.caption).foregroundStyle(.tertiary)
+                                      Text(app.priceText).font(.caption.bold()).foregroundStyle(.blue)
                                   }
                               }
-                              HStack {
+                              HStack(spacing: 10) {
                                   Button {
-                                      store.startDemoDownload(for: app)
+                                      store.addMetadataTask(for: app)
+                                      store.openOfficialListing(for: app)
                                   } label: {
-                                      Text(store.library.contains(app.id) ? "Added" : "GET")
-                                          .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
-                                          .background(Color.blue, in: Capsule()).foregroundStyle(.white)
-                                  }
-                                  Button { } label: {
-                                      Image(systemName: "square.and.arrow.up")
-                                          .font(.headline).padding(12).background(.quaternary, in: Circle())
-                                  }
+                                      Label("View in App Store", systemImage: "arrow.up.right")
+                                          .frame(maxWidth: .infinity)
+                                  }.buttonStyle(CapsuleActionStyle(prominent: true))
+                                  Button {
+                                      store.toggleSaved(app)
+                                  } label: {
+                                      Image(systemName: store.savedIDs.contains(app.id) ? "bookmark.fill" : "bookmark")
+                                          .frame(width: 46, height: 42)
+                                  }.buttonStyle(CapsuleActionStyle())
                               }
                               HStack(spacing: 0) {
-                                  metadata("VERSION", app.version)
-                                  metadata("SIZE", app.size)
-                                  metadata("CATEGORY", app.category)
-                              }
+                                  metric("RATING", app.ratingText)
+                                  metric("VERSION", app.version ?? "—")
+                                  metric("SIZE", app.sizeText)
+                              }.padding(.vertical, 12).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
                               Divider()
-                              VStack(alignment: .leading, spacing: 8) {
-                                  Text("About this app").font(.title3.bold())
-                                  Text(app.description).foregroundStyle(.secondary)
+                              VStack(alignment: .leading, spacing: 9) {
+                                  Text("About this app").font(.title2.bold())
+                                  Text(app.description ?? "No description available.")
+                                      .font(.body).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                               }
-                              GlassPanel {
-                                  Label("Demo catalogue item", systemImage: "info.circle")
-                                      .font(.subheadline.weight(.semibold))
-                                  Text("GET adds this sample entry to the demo library. It does not install an iOS application.")
+                              GlassCard {
+                                  Label("Official installation", systemImage: "lock.shield.fill").font(.headline)
+                                  Text("This app opens the official App Store listing. iOS does not let this catalogue app download and silently install App Store apps or IPA files.")
                                       .font(.caption).foregroundStyle(.secondary)
                               }
                           }.padding(22)
                       }
-                      .navigationTitle(app.name)
+                      .navigationTitle(app.trackName)
                       .navigationBarTitleDisplayMode(.inline)
-                      .toolbar {
-                          ToolbarItem(placement: .topBarTrailing) {
-                              Button("Done") { dismiss() }
-                          }
-                      }
+                      .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
                   }
               }
 
-              private func metadata(_ title: String, _ value: String) -> some View {
+              private func metric(_ title: String, _ value: String) -> some View {
                   VStack(spacing: 5) {
                       Text(title).font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
                       Text(value).font(.caption.weight(.semibold)).lineLimit(1)
@@ -475,69 +613,60 @@ jobs:
           final class StoreViewModel: ObservableObject {
               @Published var selectedTab = 0
               @Published var searchText = ""
-              @Published var selectedCategory = "All"
-              @Published var downloads: [DownloadItem] = []
-              @Published var library: Set<String> = []
+              @Published var apps: [StoreApp] = []
+              @Published var featuredApps: [StoreApp] = []
+              @Published var savedIDs: Set<Int> = []
+              @Published var tasks: [DownloadTaskItem] = []
+              @Published var isLoading = false
+              @Published var errorMessage: String?
               @Published var colorScheme: ColorScheme? = .dark
 
-              let categories = ["All", "Productivity", "Utilities", "Creativity", "Lifestyle", "Games"]
+              private let api = StoreAPI()
+              private var searchTask: Task<Void, Never>?
 
-              let apps: [StoreApp] = [
-                  StoreApp(id: "orbit", name: "Orbit Notes", developer: "Northstar Studio",
-                           subtitle: "A calmer space for your ideas",
-                           description: "Capture thoughts, organize projects and keep everyday ideas in one beautifully simple place.",
-                           category: "Productivity", version: "2.4.0", size: "42 MB",
-                           symbol: "note.text", tint: .indigo, isFeatured: true),
-                  StoreApp(id: "luma", name: "Luma Weather", developer: "Daylight Labs",
-                           subtitle: "Weather, with a little clarity",
-                           description: "A clean weather experience with daily forecasts and useful conditions at a glance.",
-                           category: "Utilities", version: "1.8.2", size: "28 MB",
-                           symbol: "sun.max.fill", tint: .orange),
-                  StoreApp(id: "frame", name: "Frame Studio", developer: "Pixel Foundry",
-                           subtitle: "Make every moment yours",
-                           description: "A sample creative toolkit for collecting inspiration and arranging visual ideas.",
-                           category: "Creativity", version: "3.1.0", size: "86 MB",
-                           symbol: "square.stack.3d.up.fill", tint: .pink),
-                  StoreApp(id: "tempo", name: "Tempo", developer: "Good Habit Co.",
-                           subtitle: "Small steps, steady days",
-                           description: "A lightweight habit companion with gentle reminders and simple progress views.",
-                           category: "Lifestyle", version: "1.2.1", size: "19 MB",
-                           symbol: "circle.grid.2x2.fill", tint: .mint),
-                  StoreApp(id: "monument", name: "Monument Valley", developer: "Demo Listing",
-                           subtitle: "A featured puzzle-game listing",
-                           description: "A sample catalogue entry for demonstrating the app detail layout. This is not a download listing.",
-                           category: "Games", version: "Demo", size: "—",
-                           symbol: "cube.fill", tint: .purple)
-              ]
-
-              var filteredApps: [StoreApp] {
-                  apps.filter { app in
-                      let categoryMatch = selectedCategory == "All" || app.category == selectedCategory
-                      let queryMatch = searchText.isEmpty ||
-                          app.name.localizedCaseInsensitiveContains(searchText) ||
-                          app.developer.localizedCaseInsensitiveContains(searchText) ||
-                          app.category.localizedCaseInsensitiveContains(searchText)
-                      return categoryMatch && queryMatch
-                  }
+              func loadFeatured() async {
+                  guard featuredApps.isEmpty else { return }
+                  await performSearch("photo editor", intoFeatured: true)
               }
 
-              func startDemoDownload(for app: StoreApp) {
-                  guard !downloads.contains(where: { $0.id == app.id }) else { return }
-                  downloads.insert(DownloadItem(id: app.id, appName: app.name,
-                                                progress: 0, state: .downloading), at: 0)
-                  library.insert(app.id)
-                  guard let index = downloads.firstIndex(where: { $0.id == app.id }) else { return }
-                  // A short UI demonstration only; no file is downloaded.
-                  Task {
-                      for step in 1...20 {
-                          try? await Task.sleep(for: .milliseconds(90))
-                          guard downloads.indices.contains(index) else { return }
-                          downloads[index].progress = Double(step) / 20
-                      }
-                      if downloads.indices.contains(index) {
-                          downloads[index].state = .complete
-                      }
+              func search(_ term: String) {
+                  searchTask?.cancel()
+                  guard !term.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                      apps = []
+                      errorMessage = nil
+                      return
                   }
+                  searchTask = Task { await performSearch(term, intoFeatured: false) }
+              }
+
+              private func performSearch(_ term: String, intoFeatured: Bool) async {
+                  isLoading = true
+                  errorMessage = nil
+                  do {
+                      let results = try await api.searchApps(term: term)
+                      if intoFeatured { featuredApps = results }
+                      else { apps = results }
+                  } catch {
+                      if !Task.isCancelled { errorMessage = error.localizedDescription }
+                  }
+                  isLoading = false
+              }
+
+              func toggleSaved(_ app: StoreApp) {
+                  if savedIDs.contains(app.id) { savedIDs.remove(app.id) }
+                  else { savedIDs.insert(app.id) }
+              }
+
+              func addMetadataTask(for app: StoreApp) {
+                  guard !tasks.contains(where: { $0.id == app.id }) else { return }
+                  tasks.insert(DownloadTaskItem(id: app.id, title: app.trackName,
+                                                detail: "Opening official App Store listing is required for installation.",
+                                                isComplete: true), at: 0)
+              }
+
+              func openOfficialListing(for app: StoreApp) {
+                  guard let url = app.trackViewUrl else { return }
+                  UIApplication.shared.open(url)
               }
           }
           EOF_DDEGLASSSTORE_STOREVIEWMODEL_SWIFT
@@ -562,49 +691,61 @@ jobs:
             A1000000000000000000000C = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;};
             A1000000000000000000000D /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
             A1000000000000000000000E /* Release */ = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 17.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
-            A1000000000000000000000F /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; CURRENT_PROJECT_VERSION = 1; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
-            A10000000000000000000010 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; CURRENT_PROJECT_VERSION = 1; INFOPLIST_KEY_CFBundleDisplayName = "DDE Glass Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
+            A1000000000000000000000F /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; CURRENT_PROJECT_VERSION = 1; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_KEY_CFBundleDisplayName = "DDE Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Debug;};
+            A10000000000000000000010 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; MARKETING_VERSION = 1.0; CURRENT_PROJECT_VERSION = 1; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_KEY_CFBundleDisplayName = "DDE Store"; PRODUCT_BUNDLE_IDENTIFIER = com.rutik.ddeglassstore; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; IPHONEOS_DEPLOYMENT_TARGET = 17.0; TARGETED_DEVICE_FAMILY = "1,2";}; name = Release;};
            };
            rootObject = A10000000000000000000001;
           }
           EOF_DDEGLASSSTORE_XCODEPROJ_PROJECT_PBXPROJ
           mkdir -p $(dirname 'README.md')
           cat > 'README.md' <<'EOF_README_MD'
-          # DDE Glass Store — iOS Simulator Starter
+          # DDE Glass Store — Advanced SwiftUI Source Project
 
-          A SwiftUI starter project for an original app-store-style interface inspired by modern iOS design.
-          It is not the proprietary DDE Store application and does not contain its private assets or catalogue.
+          An original iOS app-discovery interface using Apple's public App Store metadata search endpoint and a Liquid Glass-inspired UI.
 
-          ## Open
-          1. Extract this ZIP on a Mac.
-          2. Open `DDEGlassStore.xcodeproj` in Xcode.
-          3. Select an iPhone Simulator (iOS 17 or later).
-          4. Build and Run.
+          **This is not the proprietary DDE Store and does not contain its private source code, assets, or catalogue.**
 
-          ## Appetize.io
-          Appetize requires a compiled iOS Simulator `.app` bundle, usually uploaded as a ZIP.
-          This source project is **not itself** a compiled `.app`. Build it in Xcode first:
-          - Product > Build
-          - In Xcode's Products group, locate `DDEGlassStore.app`
-          - Use the Simulator build (not an iPhone device/archive build)
-          - Zip the `.app` bundle and upload that ZIP to Appetize.
+          ## Features
+          - Discover / Apps / Search / Downloads / Profile tabs
+          - Live app search against Apple's public iTunes Search API (`country=in`)
+          - Real app metadata: title, developer, artwork, genre, version, size, rating, description
+          - Open the official App Store product page using Apple's returned `trackViewUrl`
+          - Saved-app library state
+          - Dark / light appearance
+          - iOS 26 Liquid Glass APIs (`glassEffect`, interactive glass) with an iOS 17+ fallback
+          - Capsule navigation, spring transitions, SF Symbols bounce feedback, pressed-state scale animation
 
-          ## Current functionality
-          - Discover screen with featured and curated demo apps
-          - Search and category filtering
-          - App detail sheet
-          - Demo download queue (clearly marked as simulated)
-          - Library and settings screens
-          - Dark/light appearance preference
+          ## Critical App Store download limitation
+          Apple's public Search API is a **metadata/catalogue API**. It returns app information and product-page URLs; it does **not** provide IPA binaries or an API to install App Store apps inside this app.
 
-          ## Important
-          The catalogue uses sample data and placeholder artwork. It does not download or install third-party apps.
-          Real iOS app installation from inside another ordinary iOS app is restricted by Apple's platform rules.
+          On iOS, ordinary third-party apps cannot silently install other App Store apps. The supported path is to open the official App Store product page and let the user install there. Appetize.io does not include the Apple App Store and does not support IPA uploads or installing App Store apps. This project therefore uses a real metadata API and real official listing links, not fake APK/IPA downloads.
+
+          ## Build
+          1. Extract this ZIP on macOS.
+          2. Open `DDEGlassStore.xcodeproj` in Xcode 26 or later for the newest Liquid Glass APIs.
+          3. Select an iOS Simulator device and run.
+          4. Internet access is needed for live catalogue search and artwork.
+          5. The deployment target is iOS 17; iOS 26 devices/simulators receive native Liquid Glass. Earlier versions use a material fallback.
+
+          ## Appetize
+          Build for an iOS Simulator destination, locate the resulting `.app` product, ZIP the `.app` bundle, then upload that ZIP to Appetize. Do not upload an iPhone-device IPA.
+
+          ## Reference fidelity
+          This is an original design inspired by modern iOS Liquid Glass and app-store browsing patterns. The earlier images shown in chat were general iOS visual references, not verified DDE Store screenshots. Exact DDE-specific replication requires actual screenshots or screen recordings of its screens and animations.
           EOF_README_MD
+          mkdir -p $(dirname 'DDEGlassStore/Assets.xcassets/AppIcon.appiconset/Contents.json')
+          cat > 'DDEGlassStore/Assets.xcassets/AppIcon.appiconset/Contents.json' <<'EOF_DDEGLASSSTORE_ASSETS_XCASSETS_APPICON_APPICONSET_CONTENTS_JSON'
+          {
+            "images" : [
+              { "filename" : "icon-1024.png", "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" }
+            ],
+            "info" : { "author" : "xcode", "version" : 1 }
+          }
+          EOF_DDEGLASSSTORE_ASSETS_XCASSETS_APPICON_APPICONSET_CONTENTS_JSON
           mkdir -p $(dirname 'DDEGlassStore.xcodeproj/xcshareddata/xcschemes/DDEGlassStore.xcscheme')
           cat > 'DDEGlassStore.xcodeproj/xcshareddata/xcschemes/DDEGlassStore.xcscheme' <<'EOF_DDEGLASSSTORE_XCODEPROJ_XCSHAREDDATA_XCSCHEMES_DDEGLASSSTORE_XCSCHEME'
           <?xml version="1.0" encoding="UTF-8"?>
-          <Scheme LastUpgradeVersion = "1600" version = "1.7">
+          <Scheme LastUpgradeVersion = "2600" version = "1.7">
              <BuildAction parallelizeBuildables = "YES" buildImplicitDependencies = "YES" buildArchitectures = "Automatic">
                 <BuildActionEntries>
                    <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
@@ -627,20 +768,21 @@ jobs:
              <ArchiveAction buildConfiguration = "Release" revealArchiveInOrganizer = "YES"/>
           </Scheme>
           EOF_DDEGLASSSTORE_XCODEPROJ_XCSHAREDDATA_XCSCHEMES_DDEGLASSSTORE_XCSCHEME
+                    cp 1-icon-1024.png DDEGlassStore/Assets.xcassets/AppIcon.appiconset/icon-1024.png
       - name: Build for iOS Simulator
         run: xcodebuild -project DDEGlassStore.xcodeproj -scheme DDEGlassStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Zip app bundle
         run: |
           cd build/Build/Products/Release-iphonesimulator
-          zip -r "$GITHUB_WORKSPACE/DDEGlassStore-simulator.zip" DDEGlassStore.app
+          zip -r "$GITHUB_WORKSPACE/DDEStore-simulator.zip" DDEGlassStore.app
           cd "$GITHUB_WORKSPACE"
-          unzip -l DDEGlassStore-simulator.zip
+          unzip -l DDEStore-simulator.zip
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DDEGlassStore-simulator
-          path: DDEGlassStore-simulator.zip
+          name: DDEStore-simulator
+          path: DDEStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v6.1.0 DDEGlassStore-simulator.zip --title "DDE Glass Store v6.1 - his starter project (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's own DDE Glass Store starter project. Upload DDEGlassStore-simulator.zip to Appetize to run it."
+        run: gh release create v7.0.0 DDEStore-simulator.zip --title "DDE Store - his Advanced project with his logo (iOS Simulator)" --notes "Unsigned iOS Simulator build of the user's DDE Glass Store Advanced project, display name DDE Store, with his app icon. Upload DDEStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
