@@ -14,86 +14,255 @@ jobs:
       - name: Write app source
         run: |
           mkdir -p Sources
-          cat > Sources/DemoApp.swift <<'SWIFT'
+          cat > Sources/AppStore.swift <<'SWIFT'
           import SwiftUI
 
           @main
-          struct DemoApp: App {
+          struct AppStoreApp: App {
               var body: some Scene {
-                  WindowGroup { ContentView() }
+                  WindowGroup { RootView() }
               }
           }
 
-          struct ContentView: View {
-              @State private var animateGradient = false
-              @State private var count = 0
-              @State private var spin = false
+          struct StoreApp: Identifiable {
+              let id = UUID()
+              let name: String
+              let category: String
+              let icon: String
+              let colors: [Color]
+              var rating: String = "4.8"
+          }
 
-              let cards: [(String, String, Color)] = [
-                  ("iphone", "Real iOS app", .blue),
-                  ("checkmark.seal.fill", "Built on a Mac runner", .green),
-                  ("bolt.fill", "Running in a sandbox", .orange),
-                  ("heart.fill", "Made for Rutik", .red)
-              ]
+          let sampleApps: [StoreApp] = [
+              StoreApp(name: "WhatsApp", category: "Social Networking", icon: "message.fill", colors: [.green, .mint]),
+              StoreApp(name: "Instagram", category: "Photo & Video", icon: "camera.fill", colors: [.purple, .pink]),
+              StoreApp(name: "YouTube", category: "Entertainment", icon: "play.rectangle.fill", colors: [.red, .orange]),
+              StoreApp(name: "Spotify", category: "Music", icon: "music.note", colors: [.green, .black]),
+              StoreApp(name: "Telegram", category: "Social Networking", icon: "paperplane.fill", colors: [.blue, .cyan]),
+              StoreApp(name: "CapCut", category: "Video Editing", icon: "scissors", colors: [.black, .gray]),
+              StoreApp(name: "Snapchat", category: "Photo & Video", icon: "bolt.fill", colors: [.yellow, .orange]),
+              StoreApp(name: "X", category: "News", icon: "xmark", colors: [.black, .indigo]),
+              StoreApp(name: "Maps Pro", category: "Navigation", icon: "map.fill", colors: [.teal, .blue]),
+              StoreApp(name: "Notes+", category: "Productivity", icon: "note.text", colors: [.orange, .yellow])
+          ]
 
+          let sampleGames: [StoreApp] = [
+              StoreApp(name: "Subway Surfers", category: "Action", icon: "figure.run", colors: [.orange, .red]),
+              StoreApp(name: "Candy Crush Saga", category: "Puzzle", icon: "circle.grid.3x3.fill", colors: [.pink, .purple]),
+              StoreApp(name: "PUBG Mobile", category: "Battle Royale", icon: "scope", colors: [.brown, .black]),
+              StoreApp(name: "Free Fire MAX", category: "Action", icon: "flame.fill", colors: [.red, .yellow]),
+              StoreApp(name: "Ludo King", category: "Board", icon: "dice.fill", colors: [.blue, .purple]),
+              StoreApp(name: "Temple Run 2", category: "Adventure", icon: "figure.hiking", colors: [.green, .brown]),
+              StoreApp(name: "Clash of Clans", category: "Strategy", icon: "shield.fill", colors: [.yellow, .brown]),
+              StoreApp(name: "8 Ball Pool", category: "Sports", icon: "circle.fill", colors: [.green, .black])
+          ]
+
+          struct RootView: View {
               var body: some View {
-                  ZStack {
-                      LinearGradient(colors: [.indigo, .purple, .pink],
-                                     startPoint: animateGradient ? .topLeading : .bottomLeading,
-                                     endPoint: animateGradient ? .bottomTrailing : .topTrailing)
-                          .ignoresSafeArea()
-                          .onAppear {
-                              withAnimation(.easeInOut(duration: 6).repeatForever(autoreverses: true)) {
-                                  animateGradient.toggle()
-                              }
-                          }
-                      ScrollView {
-                          VStack(spacing: 24) {
-                              Image(systemName: "star.fill")
-                                  .font(.system(size: 72))
-                                  .foregroundColor(.white)
-                                  .shadow(radius: 12)
-                                  .rotationEffect(.degrees(spin ? 360 : 0))
-                                  .onAppear {
-                                      withAnimation(.linear(duration: 8).repeatForever(autoreverses: false)) {
-                                          spin = true
-                                      }
-                                  }
-                              Text("Hello, Rutik!")
-                                  .font(.largeTitle.bold())
-                                  .foregroundColor(.white)
-                              Text("This is a real iOS app,\nbuilt with SwiftUI and running\ninside a simulator sandbox.")
-                                  .multilineTextAlignment(.center)
-                                  .foregroundColor(.white.opacity(0.9))
-                              Button(action: { count += 1 }) {
-                                  Text(count == 0 ? "Tap me" : "Tapped \(count) times")
-                                      .font(.headline)
-                                      .padding(.horizontal, 28)
-                                      .padding(.vertical, 14)
-                                      .background(.white)
-                                      .foregroundColor(.purple)
-                                      .cornerRadius(30)
-                                      .shadow(radius: 6)
-                              }
-                              ForEach(cards, id: \.0) { icon, text, color in
-                                  HStack(spacing: 14) {
-                                      Image(systemName: icon)
-                                          .font(.title2)
-                                          .foregroundColor(color)
-                                      Text(text)
-                                          .font(.headline)
-                                      Spacer()
-                                  }
-                                  .padding()
-                                  .background(.white.opacity(0.92))
-                                  .cornerRadius(16)
-                                  .shadow(radius: 4)
-                                  .padding(.horizontal)
-                              }
-                          }
-                          .padding(.top, 60)
-                          .padding(.bottom, 40)
+                  TabView {
+                      TodayView()
+                          .tabItem { Label("Today", systemImage: "doc.text.image") }
+                      ChartsView(title: "Games", apps: sampleGames)
+                          .tabItem { Label("Games", systemImage: "gamecontroller.fill") }
+                      ChartsView(title: "Apps", apps: sampleApps)
+                          .tabItem { Label("Apps", systemImage: "square.grid.2x2.fill") }
+                      SearchView()
+                          .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                  }
+                  .tint(.blue)
+              }
+          }
+
+          struct AppIcon: View {
+              let app: StoreApp
+              var size: CGFloat = 56
+              var body: some View {
+                  RoundedRectangle(cornerRadius: size * 0.23, style: .continuous)
+                      .fill(LinearGradient(colors: app.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                      .frame(width: size, height: size)
+                      .overlay(Image(systemName: app.icon).font(.system(size: size * 0.45)).foregroundColor(.white))
+                      .shadow(color: .black.opacity(0.15), radius: 3, y: 2)
+              }
+          }
+
+          struct GetButton: View {
+              @State private var state = 0
+              var body: some View {
+                  Button(action: {
+                      if state == 0 {
+                          state = 1
+                          DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { state = 2 }
                       }
+                  }) {
+                      Group {
+                          if state == 0 {
+                              Text("GET").font(.subheadline.bold()).foregroundColor(.blue)
+                          } else if state == 1 {
+                              ProgressView().progressViewStyle(.circular).scaleEffect(0.7)
+                          } else {
+                              Text("OPEN").font(.subheadline.bold()).foregroundColor(.blue)
+                          }
+                      }
+                      .frame(width: 74, height: 30)
+                      .background(.ultraThinMaterial)
+                      .cornerRadius(15)
+                      .overlay(RoundedRectangle(cornerRadius: 15).stroke(.white.opacity(0.6), lineWidth: 1))
+                      .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                  }
+                  .buttonStyle(.plain)
+              }
+          }
+
+          struct AppRow: View {
+              let app: StoreApp
+              var rank: Int? = nil
+              var body: some View {
+                  HStack(spacing: 12) {
+                      if let rank = rank {
+                          Text("\(rank)").font(.title3.bold()).foregroundColor(.secondary).frame(width: 22)
+                      }
+                      AppIcon(app: app)
+                      VStack(alignment: .leading, spacing: 2) {
+                          Text(app.name).font(.headline)
+                          Text(app.category).font(.caption).foregroundColor(.secondary)
+                          HStack(spacing: 3) {
+                              Image(systemName: "star.fill").font(.caption2).foregroundColor(.orange)
+                              Text(app.rating).font(.caption).foregroundColor(.secondary)
+                          }
+                      }
+                      Spacer()
+                      GetButton()
+                  }
+                  .padding(.vertical, 8)
+                  .padding(.horizontal, 6)
+                  .background(.ultraThinMaterial)
+                  .cornerRadius(14)
+              }
+          }
+
+          struct FeatureCard: View {
+              @State private var shine = false
+              let eyebrow: String
+              let title: String
+              let subtitle: String
+              let app: StoreApp
+              let colors: [Color]
+              var body: some View {
+                  ZStack(alignment: .bottomLeading) {
+                      LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+                      VStack(alignment: .leading, spacing: 6) {
+                          Spacer()
+                          Image(systemName: app.icon)
+                              .font(.system(size: 90))
+                              .foregroundColor(.white.opacity(0.35))
+                              .frame(maxWidth: .infinity, alignment: .trailing)
+                              .padding(.trailing, 20)
+                          Spacer()
+                      }
+                      VStack(alignment: .leading, spacing: 6) {
+                          Spacer()
+                          Text(eyebrow).font(.caption.bold()).foregroundColor(.white.opacity(0.85))
+                          Text(title).font(.title2.bold()).foregroundColor(.white)
+                          Text(subtitle).font(.subheadline).foregroundColor(.white.opacity(0.9))
+                          HStack {
+                              AppIcon(app: app, size: 40)
+                              VStack(alignment: .leading) {
+                                  Text(app.name).font(.subheadline.bold()).foregroundColor(.white)
+                                  Text(app.category).font(.caption2).foregroundColor(.white.opacity(0.85))
+                              }
+                              Spacer()
+                              GetButton()
+                          }
+                          .padding(10)
+                          .background(.ultraThinMaterial)
+                          .cornerRadius(14)
+                      }
+                      .padding(16)
+                  }
+                  .frame(height: 340)
+                  .overlay(
+                      LinearGradient(colors: [.white.opacity(0), .white.opacity(0.28), .white.opacity(0)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                          .frame(width: 500)
+                          .rotationEffect(.degrees(18))
+                          .offset(x: shine ? 420 : -420)
+                          .allowsHitTesting(false)
+                  )
+                  .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                  .onAppear {
+                      withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: false)) { shine = true }
+                  }
+                  .cornerRadius(18)
+                  .shadow(color: .black.opacity(0.2), radius: 8, y: 4)
+                  .padding(.horizontal)
+              }
+          }
+
+          struct TodayView: View {
+              var today: String {
+                  let f = DateFormatter()
+                  f.dateFormat = "EEEE, d MMMM"
+                  return f.string(from: Date()).uppercased()
+              }
+              var body: some View {
+                  NavigationStack {
+                      ScrollView {
+                          VStack(alignment: .leading, spacing: 20) {
+                              Text(today).font(.caption.bold()).foregroundColor(.secondary).padding(.horizontal)
+                              FeatureCard(eyebrow: "NOW TRENDING", title: "Editors' Choice", subtitle: "The apps everyone is talking about", app: sampleApps[1], colors: [.indigo, .purple])
+                              FeatureCard(eyebrow: "GAME OF THE DAY", title: "Play. Win. Repeat.", subtitle: "Top picks for your weekend", app: sampleGames[3], colors: [.pink, .orange])
+                              Text("Must-Have Apps").font(.title3.bold()).padding(.horizontal)
+                              ForEach(Array(sampleApps.prefix(4))) { app in
+                                  AppRow(app: app).padding(.horizontal)
+                              }
+                          }
+                          .padding(.vertical)
+                      }
+                      .navigationTitle("Today")
+                  }
+              }
+          }
+
+          struct ChartsView: View {
+              let title: String
+              let apps: [StoreApp]
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section(header: Text("Top Free \(title)").font(.headline).textCase(nil)) {
+                              ForEach(Array(apps.enumerated()), id: \.element.id) { index, app in
+                                  AppRow(app: app, rank: index + 1)
+                              }
+                          }
+                      }
+                      .listStyle(.plain)
+                      .navigationTitle(title)
+                  }
+              }
+          }
+
+          struct SearchView: View {
+              @State private var query = ""
+              let trending = ["whatsapp", "photo editor", "ludo king", "capcut templates", "bgmi", "spotify", "video downloader", "wallpapers 4k"]
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          Section(header: Text("Trending").font(.headline).textCase(nil)) {
+                              ForEach(trending, id: \.self) { term in
+                                  HStack(spacing: 12) {
+                                      Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+                                      Text(term)
+                                  }
+                              }
+                          }
+                          Section(header: Text("Suggested").font(.headline).textCase(nil)) {
+                              ForEach(Array(sampleApps.prefix(3))) { app in
+                                  AppRow(app: app)
+                              }
+                          }
+                      }
+                      .listStyle(.plain)
+                      .navigationTitle("Search")
+                      .searchable(text: $query, prompt: "Games, apps, stories, and more")
                   }
               }
           }
@@ -102,36 +271,39 @@ jobs:
         run: |
           brew install xcodegen
           cat > project.yml <<'YML'
-          name: DemoApp
+          name: AppStore
           options:
             bundleIdPrefix: com.demo
           targets:
-            DemoApp:
+            AppStore:
               type: application
               platform: iOS
               deploymentTarget: "16.0"
               sources: [Sources]
               settings:
                 base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.demo.iosSimDemo
-                  PRODUCT_NAME: DemoApp
+                  PRODUCT_BUNDLE_IDENTIFIER: com.demo.appstoreReplica
+                  PRODUCT_NAME: AppStore
                   GENERATE_INFOPLIST_FILE: YES
+                  MARKETING_VERSION: "1.0"
+                  CURRENT_PROJECT_VERSION: "1"
+                  INFOPLIST_KEY_CFBundleDisplayName: App Store
           YML
           xcodegen
       - name: Build for iOS Simulator
-        run: xcodebuild -project DemoApp.xcodeproj -scheme DemoApp -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project AppStore.xcodeproj -scheme AppStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Zip app bundle
         run: |
           cd build/Build/Products/Release-iphonesimulator
-          zip -r "$GITHUB_WORKSPACE/DemoApp-simulator.zip" DemoApp.app
+          zip -r "$GITHUB_WORKSPACE/AppStore-simulator.zip" AppStore.app
           cd "$GITHUB_WORKSPACE"
-          unzip -l DemoApp-simulator.zip | head -20
+          unzip -l AppStore-simulator.zip
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DemoApp-simulator
-          path: DemoApp-simulator.zip
+          name: AppStore-simulator
+          path: AppStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v1.0.0 DemoApp-simulator.zip --title "iOS Simulator Demo App" --notes "Unsigned iOS Simulator build of DemoApp. Upload DemoApp-simulator.zip to Appetize to run it."
+        run: gh release create v2.0.0 AppStore-simulator.zip --title "App Store UI Demo (iOS Simulator)" --notes "Unsigned iOS Simulator build - App Store style demo UI. Upload AppStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
