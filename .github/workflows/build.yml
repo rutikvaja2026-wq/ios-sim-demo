@@ -14,7 +14,7 @@ jobs:
       - name: Write app source
         run: |
           mkdir -p Sources
-          cat > Sources/DDEStore.swift <<'SWIFT'
+          cat > Sources/DDEGlassStore.swift <<'SWIFT'
           import SwiftUI
 
           @main
@@ -70,8 +70,44 @@ jobs:
           final class StoreModel: ObservableObject {
               @Published var downloads: [DownloadItem] = []
               @Published var toast: String? = nil
+              @Published var saved: [String] = []
+              @Published var recentViews: [String] = []
               private var timer: Timer?
               private var toastTimer: Timer?
+
+              init() {
+                  saved = Self.loadList("dde_saved")
+                  recentViews = Self.loadList("dde_recent_views")
+              }
+
+              static func loadList(_ key: String) -> [String] {
+                  let raw = UserDefaults.standard.string(forKey: key) ?? ""
+                  return raw.isEmpty ? [] : raw.components(separatedBy: "|")
+              }
+
+              static func storeList(_ key: String, _ list: [String]) {
+                  UserDefaults.standard.set(list.joined(separator: "|"), forKey: key)
+              }
+
+              func isSaved(_ app: StoreApp) -> Bool { saved.contains(app.name) }
+
+              func toggleSave(_ app: StoreApp) {
+                  if isSaved(app) {
+                      saved.removeAll { $0 == app.name }
+                      showToast("Removed from Library")
+                  } else {
+                      saved.insert(app.name, at: 0)
+                      showToast("Saved to Library")
+                  }
+                  Self.storeList("dde_saved", saved)
+              }
+
+              func recordView(_ app: StoreApp) {
+                  recentViews.removeAll { $0 == app.name }
+                  recentViews.insert(app.name, at: 0)
+                  recentViews = Array(recentViews.prefix(10))
+                  Self.storeList("dde_recent_views", recentViews)
+              }
 
               func showToast(_ text: String) {
                   DispatchQueue.main.async { self.toast = text }
@@ -224,9 +260,10 @@ jobs:
                   ZStack(alignment: .bottom) {
                       Group {
                           switch tab {
-                          case 0: DiscoverView()
-                          case 1: SearchView()
-                          case 2: DownloadsView()
+                          case 0: TodayView()
+                          case 1: AppsView()
+                          case 2: SearchView()
+                          case 3: LibraryView()
                           default: ProfileView()
                           }
                       }
@@ -257,7 +294,7 @@ jobs:
 
           struct FloatingBar: View {
               @Binding var tab: Int
-              let items: [(String, String)] = [("Discover", "safari"), ("Search", "magnifyingglass"), ("Downloads", "arrow.down.circle"), ("Profile", "person.crop.circle")]
+              let items: [(String, String)] = [("Today", "doc.text.image"), ("Apps", "square.grid.2x2"), ("Search", "magnifyingglass"), ("Library", "square.stack"), ("Profile", "person.crop.circle")]
               var body: some View {
                   HStack {
                       ForEach(0..<items.count, id: \.self) { i in
@@ -284,21 +321,22 @@ jobs:
               }
           }
 
-          struct DiscoverView: View {
+          struct TodayView: View {
               var body: some View {
                   NavigationStack {
                       ScrollView {
                           VStack(alignment: .leading, spacing: 22) {
-                              FeaturedBanner(app: catalogue.first { $0.featured } ?? catalogue[0])
+                              FeaturedBanner(eyebrow: "FEATURED", app: catalogue.first { $0.featured } ?? catalogue[0])
                               CategoriesRow()
-                              AppCarousel(title: "Popular Apps", apps: Array(catalogue.prefix(8)))
-                              AppCarousel(title: "Featured Apps", apps: catalogue.filter { $0.featured })
+                              AppCarousel(title: "Trending Apps", apps: Array(catalogue.prefix(8)))
+                              AppCarousel(title: "Recommended for You", apps: Array(catalogue.dropFirst(4).prefix(8)))
                               AppCarousel(title: "Recently Added", apps: Array(catalogue.suffix(6)))
+                              FeaturedBanner(eyebrow: "EDITOR'S CHOICE", app: catalogue.first { $0.name == "Space Runner" } ?? catalogue[8])
                               Spacer().frame(height: 90)
                           }
                           .padding(.top, 8)
                       }
-                      .navigationTitle("Discover")
+                      .navigationTitle("Today")
                       .toolbar {
                           ToolbarItem(placement: .navigationBarTrailing) {
                               NavigationLink(destination: ProfileView()) {
@@ -312,6 +350,7 @@ jobs:
 
           struct FeaturedBanner: View {
               @State private var shine = false
+              let eyebrow: String
               let app: StoreApp
               var body: some View {
                   NavigationLink(destination: AppDetailView(app: app)) {
@@ -329,7 +368,7 @@ jobs:
                               .allowsHitTesting(false)
                           VStack(alignment: .leading, spacing: 8) {
                               Spacer()
-                              Text("FEATURED").font(.caption.bold()).foregroundColor(.white.opacity(0.85))
+                              Text(eyebrow).font(.caption.bold()).foregroundColor(.white.opacity(0.85))
                               Text(app.name).font(.title.bold()).foregroundColor(.white)
                               Text(app.desc).font(.subheadline).foregroundColor(.white.opacity(0.9)).lineLimit(2)
                               HStack {
@@ -363,7 +402,7 @@ jobs:
           struct CategoriesRow: View {
               var body: some View {
                   VStack(alignment: .leading, spacing: 10) {
-                      Text("Categories").font(.title3.bold()).padding(.horizontal)
+                      Text("Popular Categories").font(.title3.bold()).padding(.horizontal)
                       ScrollView(.horizontal, showsIndicators: false) {
                           HStack(spacing: 10) {
                               ForEach(categoryList, id: \.self) { cat in
@@ -499,6 +538,9 @@ jobs:
           struct SearchView: View {
               @AppStorage("dde_recent") private var recentRaw: String = ""
               @State private var query = ""
+              @State private var filterCat = "All"
+
+              let filterCats = ["All", "Productivity", "Social Media", "Entertainment", "Utilities", "Games", "Photo & Video"]
 
               var recent: [String] { recentRaw.isEmpty ? [] : recentRaw.components(separatedBy: "|") }
 
@@ -506,9 +548,10 @@ jobs:
                   let q = query.trimmingCharacters(in: .whitespaces).lowercased()
                   guard !q.isEmpty else { return [] }
                   return catalogue.filter {
-                      $0.name.lowercased().contains(q) ||
-                      $0.category.lowercased().contains(q) ||
-                      $0.developer.lowercased().contains(q)
+                      (filterCat == "All" || $0.category == filterCat) &&
+                      ($0.name.lowercased().contains(q) ||
+                       $0.category.lowercased().contains(q) ||
+                       $0.developer.lowercased().contains(q))
                   }
               }
 
@@ -538,7 +581,28 @@ jobs:
                           .background(.ultraThinMaterial)
                           .cornerRadius(16)
                           .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.35), lineWidth: 1))
-                          .padding()
+                          .padding(.horizontal)
+                          .padding(.top)
+
+                          ScrollView(.horizontal, showsIndicators: false) {
+                              HStack(spacing: 8) {
+                                  ForEach(filterCats, id: \.self) { cat in
+                                      Button(action: { filterCat = cat }) {
+                                          Text(cat)
+                                              .font(.caption.bold())
+                                              .padding(.horizontal, 12)
+                                              .padding(.vertical, 7)
+                                              .background(filterCat == cat ? Color.accentColor.opacity(0.18) : Color.clear)
+                                              .background(.ultraThinMaterial)
+                                              .cornerRadius(14)
+                                              .overlay(Capsule().stroke(filterCat == cat ? Color.accentColor : .white.opacity(0.35), lineWidth: 1))
+                                      }
+                                      .buttonStyle(.plain)
+                                  }
+                              }
+                              .padding(.horizontal)
+                          }
+                          .padding(.bottom, 8)
 
                           if query.isEmpty {
                               List {
@@ -783,10 +847,17 @@ jobs:
                       .padding(.top, 8)
                   }
                   .navigationBarTitleDisplayMode(.inline)
+                  .onAppear { store.recordView(app) }
                   .toolbar {
                       ToolbarItem(placement: .navigationBarTrailing) {
-                          ShareLink(item: "Check out \(app.name) on DDE Store (demo)!") {
-                              Image(systemName: "square.and.arrow.up")
+                          HStack(spacing: 16) {
+                              Button(action: { store.toggleSave(app) }) {
+                                  Image(systemName: store.isSaved(app) ? "heart.fill" : "heart")
+                                      .foregroundColor(store.isSaved(app) ? .red : .accentColor)
+                              }
+                              ShareLink(item: "Check out \(app.name) on DDE Glass Store (demo)!") {
+                                  Image(systemName: "square.and.arrow.up")
+                              }
                           }
                       }
                   }
@@ -853,44 +924,178 @@ jobs:
                   }
               }
           }
+          // MARK: - Apps (full catalogue)
+          struct AppsView: View {
+              let cats = ["Productivity", "Social Media", "Entertainment", "Utilities", "Games", "Photo & Video"]
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          ForEach(cats, id: \.self) { cat in
+                              let apps = catalogue.filter { $0.category == cat }
+                              if !apps.isEmpty {
+                                  Section(header: Text(cat)) {
+                                      ForEach(apps) { app in
+                                          NavigationLink(destination: AppDetailView(app: app)) {
+                                              HStack(spacing: 12) {
+                                                  AppIcon(app: app, size: 46)
+                                                  VStack(alignment: .leading, spacing: 2) {
+                                                      Text(app.name).font(.headline)
+                                                      Text(app.tagline).font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                                  }
+                                              }
+                                              .padding(.vertical, 4)
+                                          }
+                                      }
+                                  }
+                              }
+                          }
+                          Section { Spacer().frame(height: 80).listRowBackground(Color.clear) }
+                      }
+                      .listStyle(.insetGrouped)
+                      .navigationTitle("Apps")
+                  }
+              }
+          }
+
+          // MARK: - Library
+          struct LibraryView: View {
+              @EnvironmentObject var store: StoreModel
+
+              var installed: [DownloadItem] { store.downloads.filter { $0.state == .installed } }
+              var savedApps: [StoreApp] { store.saved.compactMap { n in catalogue.first { $0.name == n } } }
+              var recentApps: [StoreApp] { store.recentViews.compactMap { n in catalogue.first { $0.name == n } } }
+              var updatable: [StoreApp] {
+                  let installedNames = Set(installed.map { $0.app.name })
+                  return catalogue.filter { !installedNames.contains($0.name) }.prefix(2).map { $0 }
+              }
+
+              var body: some View {
+                  NavigationStack {
+                      List {
+                          if !updatable.isEmpty {
+                              Section(header: Text("Updates")) {
+                                  ForEach(updatable) { app in
+                                      HStack(spacing: 12) {
+                                          AppIcon(app: app, size: 46)
+                                          VStack(alignment: .leading, spacing: 2) {
+                                              Text(app.name).font(.headline)
+                                              Text("Update available (demo)").font(.caption).foregroundColor(.secondary)
+                                          }
+                                          Spacer()
+                                          GetButton(app: app)
+                                      }
+                                      .padding(.vertical, 4)
+                                  }
+                              }
+                          }
+
+                          Section(header: Text("Saved")) {
+                              if savedApps.isEmpty {
+                                  Text("Nothing saved yet. Tap the heart on any app to save it here.")
+                                      .font(.subheadline).foregroundColor(.secondary)
+                              } else {
+                                  ForEach(savedApps) { app in
+                                      NavigationLink(destination: AppDetailView(app: app)) {
+                                          HStack(spacing: 12) {
+                                              AppIcon(app: app, size: 46)
+                                              VStack(alignment: .leading, spacing: 2) {
+                                                  Text(app.name).font(.headline)
+                                                  Text(app.category).font(.caption).foregroundColor(.secondary)
+                                              }
+                                          }
+                                          .padding(.vertical, 4)
+                                      }
+                                  }
+                              }
+                          }
+
+                          Section(header: Text("Recently Viewed")) {
+                              if recentApps.isEmpty {
+                                  Text("Apps you open will show up here.")
+                                      .font(.subheadline).foregroundColor(.secondary)
+                              } else {
+                                  ForEach(recentApps) { app in
+                                      NavigationLink(destination: AppDetailView(app: app)) {
+                                          HStack(spacing: 12) {
+                                              AppIcon(app: app, size: 46)
+                                              VStack(alignment: .leading, spacing: 2) {
+                                                  Text(app.name).font(.headline)
+                                                  Text(app.developer).font(.caption).foregroundColor(.secondary)
+                                              }
+                                          }
+                                          .padding(.vertical, 4)
+                                      }
+                                  }
+                              }
+                          }
+
+                          Section(header: Text("Installed (Demo)")) {
+                              if installed.isEmpty {
+                                  Text("No demo installs yet. Get an app to see it here.")
+                                      .font(.subheadline).foregroundColor(.secondary)
+                              } else {
+                                  ForEach(installed) { item in
+                                      HStack(spacing: 12) {
+                                          AppIcon(app: item.app, size: 46)
+                                          VStack(alignment: .leading, spacing: 2) {
+                                              Text(item.app.name).font(.headline)
+                                              Text("Simulated install").font(.caption).foregroundColor(.secondary)
+                                          }
+                                          Spacer()
+                                          GetButton(app: item.app)
+                                      }
+                                      .padding(.vertical, 4)
+                                  }
+                              }
+                          }
+
+                          Section { Spacer().frame(height: 80).listRowBackground(Color.clear) }
+                      }
+                      .listStyle(.insetGrouped)
+                      .navigationTitle("Library")
+                  }
+              }
+          }
           SWIFT
       - name: Generate Xcode project
         run: |
           brew install xcodegen
           cat > project.yml <<'YML'
-          name: DDEStore
+          name: DDEGlassStore
           options:
-            bundleIdPrefix: com.ddestore
+            bundleIdPrefix: com.rutik
           targets:
-            DDEStore:
+            DDEGlassStore:
               type: application
               platform: iOS
-              deploymentTarget: "16.0"
+              deploymentTarget: "17.0"
               sources: [Sources]
               settings:
                 base:
-                  PRODUCT_BUNDLE_IDENTIFIER: com.ddestore.ios
-                  PRODUCT_NAME: DDEStore
+                  PRODUCT_BUNDLE_IDENTIFIER: com.rutik.ddeglassstore
+                  PRODUCT_NAME: DDEGlassStore
                   GENERATE_INFOPLIST_FILE: YES
                   MARKETING_VERSION: "1.0"
                   CURRENT_PROJECT_VERSION: "1"
-                  INFOPLIST_KEY_CFBundleDisplayName: DDE Store
+                  INFOPLIST_KEY_CFBundleDisplayName: DDE Glass Store
+                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
           YML
           xcodegen
       - name: Build for iOS Simulator
-        run: xcodebuild -project DDEStore.xcodeproj -scheme DDEStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project DDEGlassStore.xcodeproj -scheme DDEGlassStore -configuration Release -destination 'generic/platform=iOS Simulator' -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
       - name: Zip app bundle
         run: |
           cd build/Build/Products/Release-iphonesimulator
-          zip -r "$GITHUB_WORKSPACE/DDEStore-simulator.zip" DDEStore.app
+          zip -r "$GITHUB_WORKSPACE/DDEGlassStore-simulator.zip" DDEGlassStore.app
           cd "$GITHUB_WORKSPACE"
-          unzip -l DDEStore-simulator.zip
+          unzip -l DDEGlassStore-simulator.zip
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DDEStore-simulator
-          path: DDEStore-simulator.zip
+          name: DDEGlassStore-simulator
+          path: DDEGlassStore-simulator.zip
       - name: Publish release with zip
-        run: gh release create v3.0.0 DDEStore-simulator.zip --title "DDE Store (iOS Simulator demo)" --notes "Unsigned iOS Simulator build - DDE Store demo with liquid glass UI. Upload DDEStore-simulator.zip to Appetize to run it."
+        run: gh release create v4.0.0 DDEGlassStore-simulator.zip --title "DDE Glass Store (iOS Simulator)" --notes "Unsigned iOS Simulator build - DDE Glass Store with iOS 26-style liquid glass UI. Upload DDEGlassStore-simulator.zip to Appetize to run it."
         env:
           GH_TOKEN: ${{ github.token }}
